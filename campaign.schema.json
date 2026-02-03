@@ -1,7 +1,415 @@
 {
+  "$defs": {
+    "CampaignSchedule": {
+      "description": "Maps to POST/PUT /api/campaigns/{campaign_id}/schedule",
+      "properties": {
+        "end_time": {
+          "pattern": "^\\d{2}:\\d{2}$",
+          "title": "End Time",
+          "type": "string"
+        },
+        "friday": {
+          "default": true,
+          "title": "Friday",
+          "type": "boolean"
+        },
+        "monday": {
+          "default": true,
+          "title": "Monday",
+          "type": "boolean"
+        },
+        "saturday": {
+          "default": false,
+          "title": "Saturday",
+          "type": "boolean"
+        },
+        "save_as_template": {
+          "default": false,
+          "title": "Save As Template",
+          "type": "boolean"
+        },
+        "start_time": {
+          "pattern": "^\\d{2}:\\d{2}$",
+          "title": "Start Time",
+          "type": "string"
+        },
+        "sunday": {
+          "default": false,
+          "title": "Sunday",
+          "type": "boolean"
+        },
+        "thursday": {
+          "default": true,
+          "title": "Thursday",
+          "type": "boolean"
+        },
+        "timezone": {
+          "title": "Timezone",
+          "type": "string"
+        },
+        "tuesday": {
+          "default": true,
+          "title": "Tuesday",
+          "type": "boolean"
+        },
+        "wednesday": {
+          "default": true,
+          "title": "Wednesday",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "start_time",
+        "end_time",
+        "timezone"
+      ],
+      "title": "CampaignSchedule",
+      "type": "object"
+    },
+    "CampaignSettings": {
+      "description": "Maps to PATCH /api/campaigns/{id}/update",
+      "properties": {
+        "can_unsubscribe": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Can Unsubscribe"
+        },
+        "include_auto_replies_in_stats": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Include Auto Replies In Stats"
+        },
+        "max_emails_per_day": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Emails Per Day"
+        },
+        "max_new_leads_per_day": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max New Leads Per Day"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "open_tracking": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Open Tracking"
+        },
+        "plain_text": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plain Text"
+        },
+        "reputation_building": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reputation Building"
+        },
+        "unsubscribe_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unsubscribe Text"
+        }
+      },
+      "title": "CampaignSettings",
+      "type": "object"
+    },
+    "LeadsSpec": {
+      "properties": {
+        "allow_parallel_sending": {
+          "default": false,
+          "title": "Allow Parallel Sending",
+          "type": "boolean"
+        },
+        "lead_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lead Ids"
+        },
+        "lead_list_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lead List Id"
+        }
+      },
+      "title": "LeadsSpec",
+      "type": "object"
+    },
+    "SequenceSpec": {
+      "properties": {
+        "sequence_steps": {
+          "items": {
+            "$ref": "#/$defs/SequenceStep"
+          },
+          "minItems": 1,
+          "title": "Sequence Steps",
+          "type": "array"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "sequence_steps"
+      ],
+      "title": "SequenceSpec",
+      "type": "object"
+    },
+    "SequenceStep": {
+      "properties": {
+        "email_body": {
+          "minLength": 1,
+          "title": "Email Body",
+          "type": "string"
+        },
+        "email_subject": {
+          "minLength": 1,
+          "title": "Email Subject",
+          "type": "string"
+        },
+        "email_subject_variables": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Email Subject Variables"
+        },
+        "order": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Order"
+        },
+        "thread_reply": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Reply"
+        },
+        "variant": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Variant"
+        },
+        "variant_from_step": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Variant From Step"
+        },
+        "variant_from_step_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Variant From Step Id"
+        },
+        "wait_in_days": {
+          "minimum": 0,
+          "title": "Wait In Days",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "email_subject",
+        "email_body",
+        "wait_in_days"
+      ],
+      "title": "SequenceStep",
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Locally-validated input model for v1 campaign creation.\n\nThis is a *workflow spec* that orchestrates multiple EmailBison endpoints:\n- POST /api/campaigns\n- PATCH /api/campaigns/{id}/update (optional)\n- POST /api/campaigns/{id}/schedule (optional)\n- POST /api/campaigns/v1.1/{id}/sequence-steps (optional)\n- POST /api/campaigns/{id}/leads/attach-* (optional)\n\nFile-driven mode should use this schema.",
+  "properties": {
+    "leads": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LeadsSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "name": {
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "schedule": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CampaignSchedule"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "sequence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SequenceSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "settings": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CampaignSettings"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "type": {
+      "default": "outbound",
+      "enum": [
+        "outbound",
+        "reply_followup"
+      ],
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
   "title": "CampaignCreateSpec",
-  "description": "Schema for campaign.example.json (CampaignCreateSpec). NOTE: regenerate from pydantic once python deps are installed.",
-  "type": "object",
-  "properties": {}
+  "type": "object"
 }

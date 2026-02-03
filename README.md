@@ -32,16 +32,25 @@ Config precedence:
 ### Required
 
 - `EMAILBISON_API_TOKEN`
-
-Optional:
-- `EMAILBISON_BASE_URL` (default: `https://dedi.emailbison.com`)
+- `EMAILBISON_BASE_URL`
+  - EmailBison is instance-specific; for custom domains it will look like `https://send.yourdomain.com`
 
 Example:
 
 ```bash
+# Note: the token contains a `|`, so quote it.
 export EMAILBISON_API_TOKEN='…'
-# optional override:
-export EMAILBISON_BASE_URL='https://dedi.emailbison.com'
+export EMAILBISON_BASE_URL='https://send.yourdomain.com'
+```
+
+### Local .env (optional)
+
+If you prefer a local env file, create `.env` (it is gitignored) and `source` it:
+
+```bash
+set -a
+. ./.env
+set +a
 ```
 
 ### Optional
@@ -49,7 +58,7 @@ export EMAILBISON_BASE_URL='https://dedi.emailbison.com'
 - `EMAILBISON_TIMEOUT_SECONDS` (default: 20)
 - `EMAILBISON_RETRIES` (default: 2)
 - `EMAILBISON_DEFAULT_TIMEZONE`
-- `EMAILBISON_CAMPAIGNS_PATH` (default: `/campaigns`)
+- `EMAILBISON_CAMPAIGNS_PATH` (default: `/api/campaigns`) (advanced override)
 
 ### Config file
 
@@ -60,7 +69,7 @@ Create either:
 Example `config.toml`:
 
 ```toml
-base_url = "https://api.emailbison.example"
+base_url = "https://send.yourdomain.com"
 api_token = "…" # prefer env var; if you store here, chmod 600
 timeout_seconds = 20
 retries = 2
@@ -72,12 +81,20 @@ retries = 2
 emailbison --help
 emailbison campaign --help
 emailbison campaign create --help
+emailbison campaign list --help
+emailbison campaign get --help
 ```
 
 ### Create a campaign (file-driven)
 
 ```bash
 emailbison campaign create --file campaign.example.json
+```
+
+Validate only (no API call):
+
+```bash
+python -c 'import json; from emailbison.models import CampaignCreateSpec; CampaignCreateSpec.model_validate(json.load(open("campaign.example.json")))'
 ```
 
 ### Create a campaign (flags)
@@ -99,6 +116,21 @@ emailbison campaign create \
   --schedule-timezone America/New_York \
   --schedule-start 09:00 \
   --schedule-end 17:00
+```
+
+### Other commands
+
+```bash
+# list campaigns
+emailbison campaign list
+
+# show full details
+emailbison --json campaign get 138
+
+# lifecycle
+emailbison campaign pause 138
+emailbison campaign resume 138
+emailbison campaign archive 138
 ```
 
 ### Output formats
@@ -129,9 +161,18 @@ pytest
 ruff check .
 ```
 
+### Regenerate JSON schema
+
+```bash
+python scripts/generate_campaign_schema.py
+```
+
 ## Notes
 
 This CLI orchestrates multiple EmailBison endpoints for the file-driven workflow.
-The authoritative API reference is embedded in EmailBison’s docs at:
+
+EmailBison API docs (example instance):
 - https://dedi.emailbison.com/api/reference
 - OpenAPI source: https://dedi.emailbison.com/api/reference.openapi
+
+Your real base URL may differ (e.g. `https://send.yourdomain.com`).

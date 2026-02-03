@@ -165,6 +165,47 @@ class EmailBisonClient:
         path = f"{self.settings.campaigns_path}/{campaign_id}/leads/attach-leads"
         return self.request_json("POST", path, json_body=payload)
 
+    def list_campaigns(
+        self,
+        *,
+        search: str | None = None,
+        status: str | None = None,
+        tag_ids: list[int] | None = None,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        payload: dict[str, Any] = {}
+        if search:
+            payload["search"] = search
+        if status:
+            payload["status"] = status
+        if tag_ids:
+            payload["tag_ids"] = tag_ids
+
+        # Docs show optional requestBody for GET (unusual, but supported by EmailBison).
+        return self.request_json(
+            "GET",
+            self.settings.campaigns_path,
+            json_body=payload or None,
+        )
+
+    def campaign_details(
+        self,
+        campaign_id: int,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}"
+        return self.request_json("GET", path)
+
+    def pause_campaign(self, campaign_id: int) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/pause"
+        return self.request_json("PATCH", path)
+
+    def resume_campaign(self, campaign_id: int) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/resume"
+        return self.request_json("PATCH", path)
+
+    def archive_campaign(self, campaign_id: int) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/archive"
+        return self.request_json("PATCH", path)
+
 
 def _safe_json(resp: httpx.Response) -> dict[str, Any]:
     try:

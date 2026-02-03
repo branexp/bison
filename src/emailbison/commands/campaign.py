@@ -17,7 +17,39 @@ from ..models import (
     SequenceSpec,
 )
 
+# Additional campaign lifecycle commands (list/get/pause/resume/archive)
+from .campaign_admin import (
+    archive_campaign as _archive_campaign,
+)
+from .campaign_admin import (
+    get_campaign as _get_campaign,
+)
+from .campaign_admin import (
+    list_campaigns as _list_campaigns,
+)
+from .campaign_admin import (
+    pause_campaign as _pause_campaign,
+)
+from .campaign_admin import (
+    resume_campaign as _resume_campaign,
+)
+
 app = typer.Typer(add_completion=False)
+
+# Register lifecycle commands into the same `campaign` group.
+app.command("list")(_list_campaigns)
+app.command("get")(_get_campaign)
+app.command("pause")(_pause_campaign)
+app.command("resume")(_resume_campaign)
+app.command("archive")(_archive_campaign)
+
+
+def _load_settings_or_exit(*, base_url: str | None) -> Any:
+    try:
+        return load_settings(base_url=base_url)
+    except ConfigError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=3) from e
 
 
 @app.command("create")
@@ -86,11 +118,7 @@ def create_campaign(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    try:
-        settings = load_settings(base_url=base_url)
-    except ConfigError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(code=3) from e
+    settings = _load_settings_or_exit(base_url=base_url)
 
     if file is not None:
         spec = _validate_spec(_load_json_file(file))
