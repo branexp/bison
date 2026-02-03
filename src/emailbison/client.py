@@ -65,14 +65,24 @@ class EmailBisonClient:
         path: str,
         *,
         json_body: Any | None = None,
+        params: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], DebugInfo]:
         url = f"{self.settings.base_url}{path}" if path.startswith("/") else path
         resp: httpx.Response | None = None
+        request_kwargs: dict[str, Any] = {}
+        if params:
+            request_kwargs["params"] = params
+
         try:
             if json_body is None:
-                resp = self._client.request(method, path)
+                resp = self._client.request(method, path, **request_kwargs)
             else:
-                resp = self._client.request(method, path, content=json.dumps(json_body))
+                resp = self._client.request(
+                    method,
+                    path,
+                    content=json.dumps(json_body),
+                    **request_kwargs,
+                )
         except httpx.TimeoutException as e:
             raise NetworkError("Network timeout calling EmailBison") from e
         except httpx.HTTPError as e:
@@ -185,6 +195,121 @@ class EmailBisonClient:
             "GET",
             self.settings.campaigns_path,
             json_body=payload or None,
+        )
+
+    def get_campaign_sender_emails(
+        self,
+        campaign_id: int,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/sender-emails"
+        return self.request_json("GET", path)
+
+    def attach_sender_emails(
+        self,
+        campaign_id: int,
+        *,
+        sender_email_ids: list[int],
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/attach-sender-emails"
+        return self.request_json(
+            "POST",
+            path,
+            json_body={"sender_email_ids": [str(x) for x in sender_email_ids]},
+        )
+
+    def remove_sender_emails(
+        self,
+        campaign_id: int,
+        *,
+        sender_email_ids: list[int],
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/remove-sender-emails"
+        return self.request_json(
+            "DELETE",
+            path,
+            json_body={"sender_email_ids": [str(x) for x in sender_email_ids]},
+        )
+
+    def campaign_stats(
+        self,
+        campaign_id: int,
+        *,
+        start_date: str,
+        end_date: str,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/stats"
+        return self.request_json(
+            "POST",
+            path,
+            json_body={"start_date": start_date, "end_date": end_date},
+        )
+
+    def campaign_replies(
+        self,
+        campaign_id: int,
+        *,
+        search: str | None = None,
+        status: str | None = None,
+        folder: str | None = None,
+        read: bool | None = None,
+        sender_email_id: int | None = None,
+        lead_id: int | None = None,
+        tag_ids: list[int] | None = None,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/replies"
+        params: dict[str, Any] = {}
+        if search:
+            params["search"] = search
+        if status:
+            params["status"] = status
+        if folder:
+            params["folder"] = folder
+        if read is not None:
+            params["read"] = read
+        if sender_email_id is not None:
+            params["sender_email_id"] = sender_email_id
+        if lead_id is not None:
+            params["lead_id"] = lead_id
+        if tag_ids:
+            params["tag_ids"] = tag_ids
+
+        return self.request_json("GET", path, params=params or None)
+
+    def stop_future_emails_for_leads(
+        self,
+        campaign_id: int,
+        *,
+        lead_ids: list[int],
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/leads/stop-future-emails"
+        return self.request_json(
+            "POST",
+            path,
+            json_body={"lead_ids": lead_ids},
+        )
+
+    def list_sender_emails(
+        self,
+        *,
+        search: str | None = None,
+        tag_ids: list[int] | None = None,
+        excluded_tag_ids: list[int] | None = None,
+        without_tags: bool | None = None,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        params: dict[str, Any] = {}
+        if search:
+            params["search"] = search
+        if tag_ids:
+            params["tag_ids"] = tag_ids
+        if excluded_tag_ids:
+            params["excluded_tag_ids"] = excluded_tag_ids
+        if without_tags is not None:
+            params["without_tags"] = without_tags
+
+        return self.request_json(
+            "GET",
+            self.settings.sender_emails_path,
+            params=params or None,
         )
 
     def campaign_details(

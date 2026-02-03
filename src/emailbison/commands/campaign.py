@@ -17,9 +17,21 @@ from ..models import (
     SequenceSpec,
 )
 
-# Additional campaign lifecycle commands (list/get/pause/resume/archive)
+# Additional campaign lifecycle + management commands
 from .campaign_admin import (
     archive_campaign as _archive_campaign,
+)
+from .campaign_admin import (
+    attach_sender_emails as _attach_sender_emails,
+)
+from .campaign_admin import (
+    campaign_replies as _campaign_replies,
+)
+from .campaign_admin import (
+    campaign_sender_emails as _campaign_sender_emails,
+)
+from .campaign_admin import (
+    campaign_stats as _campaign_stats,
 )
 from .campaign_admin import (
     get_campaign as _get_campaign,
@@ -31,17 +43,31 @@ from .campaign_admin import (
     pause_campaign as _pause_campaign,
 )
 from .campaign_admin import (
+    remove_sender_emails as _remove_sender_emails,
+)
+from .campaign_admin import (
     resume_campaign as _resume_campaign,
+)
+from .campaign_admin import (
+    stop_future_emails as _stop_future_emails,
 )
 
 app = typer.Typer(add_completion=False)
 
-# Register lifecycle commands into the same `campaign` group.
+# Register lifecycle/management commands into the same `campaign` group.
 app.command("list")(_list_campaigns)
 app.command("get")(_get_campaign)
 app.command("pause")(_pause_campaign)
 app.command("resume")(_resume_campaign)
 app.command("archive")(_archive_campaign)
+
+app.command("sender-emails")(_campaign_sender_emails)
+app.command("attach-sender-emails")(_attach_sender_emails)
+app.command("remove-sender-emails")(_remove_sender_emails)
+
+app.command("stats")(_campaign_stats)
+app.command("replies")(_campaign_replies)
+app.command("stop-future-emails")(_stop_future_emails)
 
 
 def _load_settings_or_exit(*, base_url: str | None) -> Any:

@@ -83,6 +83,7 @@ emailbison campaign --help
 emailbison campaign create --help
 emailbison campaign list --help
 emailbison campaign get --help
+emailbison sender-emails list --help
 ```
 
 ### Create a campaign (file-driven)
@@ -131,6 +132,24 @@ emailbison --json campaign get 138
 emailbison campaign pause 138
 emailbison campaign resume 138
 emailbison campaign archive 138
+
+# sender emails
+emailbison sender-emails list
+emailbison campaign sender-emails 138
+
+# attach/remove sender emails (IDs come from sender-emails list)
+# WARNING: these modify the campaign.
+emailbison campaign attach-sender-emails 138 --sender-email-id 1 --sender-email-id 2
+emailbison campaign remove-sender-emails 138 --sender-email-id 1
+
+# stats + replies
+emailbison --json campaign stats 138 --start-date 2024-07-01 --end-date 2024-07-19
+# Note: the API may return 400 if the campaign has no sequence.
+emailbison campaign replies 138 --folder inbox
+
+# stop future sends for specific leads
+# WARNING: this modifies lead state in the campaign.
+emailbison campaign stop-future-emails 138 --lead-id 123 --lead-id 456
 ```
 
 ### Output formats

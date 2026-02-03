@@ -77,3 +77,67 @@ def test_campaign_details_pause_resume_archive() -> None:
     assert raw["data"]["status"] == "archived"
 
     client.close()
+
+
+@respx.mock
+def test_campaign_sender_emails_attach_remove() -> None:
+    respx.get("https://api.example.com/api/campaigns/123/sender-emails").mock(
+        return_value=Response(200, json={"data": [{"id": 1, "email": "a@b.com"}]})
+    )
+    respx.post("https://api.example.com/api/campaigns/123/attach-sender-emails").mock(
+        return_value=Response(200, json={"success": True})
+    )
+    respx.delete("https://api.example.com/api/campaigns/123/remove-sender-emails").mock(
+        return_value=Response(200, json={"success": True})
+    )
+
+    client = EmailBisonClient(_settings())
+
+    raw, _ = client.get_campaign_sender_emails(123)
+    assert raw["data"][0]["id"] == 1
+
+    raw, _ = client.attach_sender_emails(123, sender_email_ids=[1, 2])
+    assert raw["success"] is True
+
+    raw, _ = client.remove_sender_emails(123, sender_email_ids=[1])
+    assert raw["success"] is True
+
+    client.close()
+
+
+@respx.mock
+def test_campaign_stats_replies_stop_future_emails() -> None:
+    respx.post("https://api.example.com/api/campaigns/123/stats").mock(
+        return_value=Response(200, json={"data": {"emails_sent": "1"}})
+    )
+    respx.get("https://api.example.com/api/campaigns/123/replies").mock(
+        return_value=Response(200, json={"data": [{"id": 9, "subject": "hi"}]})
+    )
+    respx.post(
+        "https://api.example.com/api/campaigns/123/leads/stop-future-emails"
+    ).mock(return_value=Response(200, json={"data": {"success": True}}))
+
+    client = EmailBisonClient(_settings())
+
+    raw, _ = client.campaign_stats(123, start_date="2024-07-01", end_date="2024-07-19")
+    assert raw["data"]["emails_sent"] == "1"
+
+    raw, _ = client.campaign_replies(123, search="x")
+    assert raw["data"][0]["id"] == 9
+
+    raw, _ = client.stop_future_emails_for_leads(123, lead_ids=[1, 2, 3])
+    assert raw["data"]["success"] is True
+
+    client.close()
+
+
+@respx.mock
+def test_list_sender_emails() -> None:
+    respx.get("https://api.example.com/api/sender-emails").mock(
+        return_value=Response(200, json={"data": [{"id": 7, "email": "x@y.com"}]})
+    )
+
+    client = EmailBisonClient(_settings())
+    raw, _ = client.list_sender_emails(search="x")
+    assert raw["data"][0]["id"] == 7
+    client.close()

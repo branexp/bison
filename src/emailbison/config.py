@@ -20,6 +20,7 @@ class Settings:
     # Endpoint paths (override only if EmailBison changes these)
     campaigns_path: str = "/api/campaigns"
     campaigns_v11_path: str = "/api/campaigns/v1.1"
+    sender_emails_path: str = "/api/sender-emails"
 
 
 class ConfigError(RuntimeError):

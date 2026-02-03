@@ -6,9 +6,11 @@ from typing import Any
 import typer
 
 from .commands.campaign import app as campaign_app
+from .commands.sender_emails import app as sender_emails_app
 
 app = typer.Typer(add_completion=False)
 app.add_typer(campaign_app, name="campaign")
+app.add_typer(sender_emails_app, name="sender-emails")
 
 
 @app.callback()
