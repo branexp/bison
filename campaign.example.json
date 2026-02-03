@@ -30,7 +30,7 @@
         "email_subject_variables": ["{FIRST_NAME}"],
         "order": 1,
         "email_body": "Hey {FIRST_NAME} — quick note…",
-        "wait_in_days": 0,
+        "wait_in_days": 1,
         "thread_reply": false
       },
       {

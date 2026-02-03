@@ -48,7 +48,7 @@ class SequenceStep(BaseModel):
 
     order: int | None = None
     email_body: str = Field(min_length=1)
-    wait_in_days: int = Field(ge=0)
+    wait_in_days: int = Field(ge=1)
 
     variant: bool | None = None
     variant_from_step: int | None = None
@@ -66,6 +66,37 @@ class SequenceStep(BaseModel):
 class SequenceSpec(BaseModel):
     title: str = Field(min_length=1)
     sequence_steps: list[SequenceStep] = Field(min_length=1)
+
+
+class SequenceStepUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int = Field(ge=1)
+
+    email_subject: str = Field(min_length=1)
+    email_subject_variables: list[str] | None = None
+
+    order: int = Field(ge=1)
+    email_body: str = Field(min_length=1)
+    wait_in_days: int = Field(ge=1)
+
+    variant: bool | None = None
+    variant_from_step_id: int | None = None
+
+    thread_reply: bool | None = None
+
+    @model_validator(mode="after")
+    def _validate_variant(self) -> SequenceStepUpdate:
+        if self.variant is True and self.variant_from_step_id is None:
+            raise ValueError("variant_from_step_id is required when variant=true")
+        return self
+
+
+class SequenceUpdateSpec(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(min_length=1)
+    sequence_steps: list[SequenceStepUpdate] = Field(min_length=1)
 
 
 class LeadsSpec(BaseModel):

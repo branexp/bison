@@ -330,7 +330,7 @@
           "title": "Variant From Step Id"
         },
         "wait_in_days": {
-          "minimum": 0,
+          "minimum": 1,
           "title": "Wait In Days",
           "type": "integer"
         }

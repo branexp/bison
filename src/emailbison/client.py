@@ -151,6 +151,13 @@ class EmailBisonClient:
         path = f"{self.settings.campaigns_path}/{campaign_id}/schedule"
         return self.request_json("POST", path, json_body=payload)
 
+    def get_sequence_steps_v11(
+        self,
+        campaign_id: int,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_v11_path}/{campaign_id}/sequence-steps"
+        return self.request_json("GET", path)
+
     def create_sequence_steps_v11(
         self,
         campaign_id: int,
@@ -158,6 +165,30 @@ class EmailBisonClient:
     ) -> tuple[dict[str, Any], DebugInfo]:
         path = f"{self.settings.campaigns_v11_path}/{campaign_id}/sequence-steps"
         return self.request_json("POST", path, json_body=payload)
+
+    def update_sequence_steps_v11(
+        self,
+        sequence_id: int,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_v11_path}/sequence-steps/{sequence_id}"
+        return self.request_json("PUT", path, json_body=payload)
+
+    def delete_sequence_step(
+        self,
+        sequence_step_id: int,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"/api/campaigns/sequence-steps/{sequence_step_id}"
+        return self.request_json("DELETE", path)
+
+    def test_sequence_step_email(
+        self,
+        sequence_step_id: int,
+        *,
+        email: str,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"/api/campaigns/sequence-steps/{sequence_step_id}/test-email"
+        return self.request_json("POST", path, json_body={"email": email})
 
     def attach_lead_list(
         self,

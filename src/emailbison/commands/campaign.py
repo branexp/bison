@@ -51,6 +51,7 @@ from .campaign_admin import (
 from .campaign_admin import (
     stop_future_emails as _stop_future_emails,
 )
+from .campaign_sequence import app as campaign_sequence_app
 
 app = typer.Typer(add_completion=False)
 
@@ -68,6 +69,9 @@ app.command("remove-sender-emails")(_remove_sender_emails)
 app.command("stats")(_campaign_stats)
 app.command("replies")(_campaign_replies)
 app.command("stop-future-emails")(_stop_future_emails)
+
+# Nested sequence management group
+app.add_typer(campaign_sequence_app, name="sequence")
 
 
 def _load_settings_or_exit(*, base_url: str | None) -> Any:

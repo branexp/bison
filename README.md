@@ -83,6 +83,7 @@ emailbison campaign --help
 emailbison campaign create --help
 emailbison campaign list --help
 emailbison campaign get --help
+emailbison campaign sequence --help
 emailbison sender-emails list --help
 ```
 
@@ -128,6 +129,11 @@ emailbison campaign create \
 ```bash
 # list campaigns
 emailbison campaign list
+
+# sequence management
+emailbison campaign sequence get 138
+emailbison campaign sequence set 138 --file sequence.json
+emailbison campaign sequence update 116 --file sequence.update.json
 
 # show full details
 emailbison --json campaign get 138

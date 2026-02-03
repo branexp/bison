@@ -141,3 +141,39 @@ def test_list_sender_emails() -> None:
     raw, _ = client.list_sender_emails(search="x")
     assert raw["data"][0]["id"] == 7
     client.close()
+
+
+@respx.mock
+def test_sequence_get_set_update() -> None:
+    respx.get("https://api.example.com/api/campaigns/v1.1/123/sequence-steps").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "sequence_id": 55,
+                    "sequence_steps": [{"id": 9, "email_subject": "Hi", "order": 1}],
+                }
+            },
+        )
+    )
+
+    respx.post("https://api.example.com/api/campaigns/v1.1/123/sequence-steps").mock(
+        return_value=Response(200, json={"data": {"id": 55}})
+    )
+
+    respx.put("https://api.example.com/api/campaigns/v1.1/sequence-steps/55").mock(
+        return_value=Response(200, json={"data": {"id": 55}})
+    )
+
+    client = EmailBisonClient(_settings())
+
+    raw, _ = client.get_sequence_steps_v11(123)
+    assert raw["data"]["sequence_id"] == 55
+
+    raw, _ = client.create_sequence_steps_v11(123, {"title": "x", "sequence_steps": []})
+    assert raw["data"]["id"] == 55
+
+    raw, _ = client.update_sequence_steps_v11(55, {"title": "x", "sequence_steps": []})
+    assert raw["data"]["id"] == 55
+
+    client.close()
