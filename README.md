@@ -86,7 +86,9 @@ emailbison campaign get --help
 emailbison sender-emails list --help
 ```
 
-### Create a campaign (file-driven)
+### Create a campaign (file-driven, one-shot)
+
+Include `sender_email_ids` in your JSON to make the campaign fully ready (no follow-up attach step):
 
 ```bash
 emailbison campaign create --file campaign.example.json
@@ -106,13 +108,15 @@ Minimal create (campaign container only):
 emailbison campaign create --name "My campaign" --type outbound
 ```
 
-You can also include settings/leads/schedule via flags:
+You can also include settings/leads/schedule/sender-emails via flags:
 
 ```bash
 emailbison campaign create \
   --name "My campaign" \
   --max-emails-per-day 100 \
   --open-tracking \
+  --sender-email-id 1 \
+  --sender-email-id 2 \
   --lead-list-id 123 \
   --schedule-timezone America/New_York \
   --schedule-start 09:00 \

@@ -346,7 +346,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Locally-validated input model for v1 campaign creation.\n\nThis is a *workflow spec* that orchestrates multiple EmailBison endpoints:\n- POST /api/campaigns\n- PATCH /api/campaigns/{id}/update (optional)\n- POST /api/campaigns/{id}/schedule (optional)\n- POST /api/campaigns/v1.1/{id}/sequence-steps (optional)\n- POST /api/campaigns/{id}/leads/attach-* (optional)\n\nFile-driven mode should use this schema.",
+  "description": "Locally-validated input model for v1 campaign creation.\n\nThis is a *workflow spec* that orchestrates multiple EmailBison endpoints:\n- POST /api/campaigns\n- PATCH /api/campaigns/{id}/update (optional)\n- POST /api/campaigns/{id}/schedule (optional)\n- POST /api/campaigns/v1.1/{id}/sequence-steps (optional)\n- POST /api/campaigns/{id}/attach-sender-emails (optional)\n- POST /api/campaigns/{id}/leads/attach-* (optional)\n\nFile-driven mode should use this schema.",
   "properties": {
     "leads": {
       "anyOf": [
@@ -374,6 +374,22 @@
         }
       ],
       "default": null
+    },
+    "sender_email_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sender Email Ids"
     },
     "sequence": {
       "anyOf": [

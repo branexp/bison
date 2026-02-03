@@ -138,6 +138,12 @@ def create_campaign(
         "--sequence-file",
         help="JSON file containing {title, sequence_steps}.",
     ),
+    # Sender emails
+    sender_email_id: list[int] | None = typer.Option(
+        None,
+        "--sender-email-id",
+        help="Attach sender email id (repeatable).",
+    ),
     # Config overrides
     base_url: str | None = typer.Option(None, "--base-url"),
 ) -> None:
@@ -207,6 +213,7 @@ def create_campaign(
             schedule=schedule_obj,
             leads=leads_obj,
             sequence=sequence_obj,
+            sender_email_ids=sender_email_id or None,
         )
 
     client = EmailBisonClient(settings, debug=debug)
@@ -234,6 +241,12 @@ def create_campaign(
             client.create_sequence_steps_v11(
                 campaign_id,
                 {"title": spec.sequence.title, "sequence_steps": steps},
+            )
+
+        if spec.sender_email_ids is not None:
+            client.attach_sender_emails(
+                campaign_id,
+                sender_email_ids=spec.sender_email_ids,
             )
 
         if spec.leads is not None:

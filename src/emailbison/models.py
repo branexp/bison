@@ -88,6 +88,7 @@ class CampaignCreateSpec(BaseModel):
     - PATCH /api/campaigns/{id}/update (optional)
     - POST /api/campaigns/{id}/schedule (optional)
     - POST /api/campaigns/v1.1/{id}/sequence-steps (optional)
+    - POST /api/campaigns/{id}/attach-sender-emails (optional)
     - POST /api/campaigns/{id}/leads/attach-* (optional)
 
     File-driven mode should use this schema.
@@ -101,6 +102,10 @@ class CampaignCreateSpec(BaseModel):
     settings: CampaignSettings | None = None
     schedule: CampaignSchedule | None = None
     sequence: SequenceSpec | None = None
+
+    # Attach sender email accounts to the campaign. Repeatable.
+    sender_email_ids: list[int] | None = Field(default=None, min_length=1)
+
     leads: LeadsSpec | None = None
 
 

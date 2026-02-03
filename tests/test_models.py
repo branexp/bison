@@ -19,3 +19,8 @@ def test_campaign_create_requires_name() -> None:
 def test_sequence_requires_steps() -> None:
     with pytest.raises(ValidationError):
         SequenceSpec.model_validate({"title": "x", "sequence_steps": []})
+
+
+def test_sender_email_ids_non_empty_if_present() -> None:
+    with pytest.raises(ValidationError):
+        CampaignCreateSpec.model_validate({"name": "x", "sender_email_ids": []})
