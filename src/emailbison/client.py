@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from .config import Settings
+from .utils.redact import redact_token
+
+
+class EmailBisonError(RuntimeError):
+    pass
+
+
+class AuthError(EmailBisonError):
+    pass
+
+
+class ApiError(EmailBisonError):
+    def __init__(self, message: str, *, status_code: int | None = None, details: Any = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.details = details
+
+
+class NetworkError(EmailBisonError):
+    pass
+
+
+@dataclass(frozen=True)
+class DebugInfo:
+    method: str
+    url: str
+    status_code: int | None
+    request_id: str | None
+
+
+class EmailBisonClient:
+    def __init__(self, settings: Settings, *, debug: bool = False):
+        self.settings = settings
+        self.debug = debug
+        self._client = httpx.Client(
+            base_url=self.settings.base_url,
+            timeout=httpx.Timeout(self.settings.timeout_seconds),
+            headers={
+                "Authorization": f"Bearer {self.settings.api_token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+        )
+
+    def close(self) -> None:
+        self._client.close()
+
+    def debug_redacted_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {redact_token(self.settings.api_token)}",
+        }
+
+    def request_json(self, method: str, path: str, *, json_body: Any | None = None) -> tuple[dict[str, Any], DebugInfo]:
+        url = f"{self.settings.base_url}{path}" if path.startswith("/") else path
+        resp: httpx.Response | None = None
+        try:
+            if json_body is None:
+                resp = self._client.request(method, path)
+            else:
+                resp = self._client.request(method, path, content=json.dumps(json_body))
+        except httpx.TimeoutException as e:
+            raise NetworkError("Network timeout calling EmailBison") from e
+        except httpx.HTTPError as e:
+            raise NetworkError("Network error calling EmailBison") from e
+
+        dbg = self._debug_summary(resp, method=method.upper(), url=url)
+        self._raise_for_status(resp)
+        return _safe_json(resp), dbg
+
+    def _debug_summary(self, resp: httpx.Response | None, *, method: str, url: str) -> DebugInfo:
+        request_id = None
+        status = None
+        if resp is not None:
+            status = resp.status_code
+            request_id = resp.headers.get("x-request-id") or resp.headers.get("x-correlation-id")
+        return DebugInfo(method=method, url=url, status_code=status, request_id=request_id)
+
+    def _raise_for_status(self, resp: httpx.Response) -> None:
+        if resp.status_code in (401, 403):
+            raise AuthError(
+                "Auth failed (401/403). Set EMAILBISON_API_TOKEN or config api_token."
+            )
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("retry-after")
+            msg = "Rate limited (429)."
+            if retry_after:
+                msg += f" Retry-After: {retry_after}"
+            raise ApiError(msg, status_code=resp.status_code, details=_safe_json(resp))
+        if resp.status_code >= 400:
+            raise ApiError(
+                f"API error ({resp.status_code}).",
+                status_code=resp.status_code,
+                details=_safe_json(resp),
+            )
+
+    # High-level helpers
+
+    def create_campaign(self, *, name: str, type: str = "outbound") -> tuple[dict[str, Any], DebugInfo]:
+        payload: dict[str, Any] = {"name": name, "type": type}
+        return self.request_json("POST", self.settings.campaigns_path, json_body=payload)
+
+    def update_campaign_settings(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/update"
+        return self.request_json("PATCH", path, json_body=payload)
+
+    def create_campaign_schedule(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/schedule"
+        return self.request_json("POST", path, json_body=payload)
+
+    def create_sequence_steps_v11(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_v11_path}/{campaign_id}/sequence-steps"
+        return self.request_json("POST", path, json_body=payload)
+
+    def attach_lead_list(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/leads/attach-lead-list"
+        return self.request_json("POST", path, json_body=payload)
+
+    def attach_leads(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/leads/attach-leads"
+        return self.request_json("POST", path, json_body=payload)
+
+
+def _safe_json(resp: httpx.Response) -> dict[str, Any]:
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
+    except Exception:
+        return {"text": resp.text}

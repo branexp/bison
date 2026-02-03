@@ -1,0 +1,49 @@
+{
+  "name": "Example Campaign",
+  "type": "outbound",
+  "settings": {
+    "max_emails_per_day": 100,
+    "max_new_leads_per_day": 25,
+    "open_tracking": true,
+    "plain_text": false,
+    "can_unsubscribe": true,
+    "unsubscribe_text": "Unsubscribe here"
+  },
+  "schedule": {
+    "monday": true,
+    "tuesday": true,
+    "wednesday": true,
+    "thursday": true,
+    "friday": true,
+    "saturday": false,
+    "sunday": false,
+    "start_time": "09:00",
+    "end_time": "17:00",
+    "timezone": "America/New_York",
+    "save_as_template": false
+  },
+  "sequence": {
+    "title": "Example sequence",
+    "sequence_steps": [
+      {
+        "email_subject": "Hello {FIRST_NAME}",
+        "email_subject_variables": ["{FIRST_NAME}"],
+        "order": 1,
+        "email_body": "Hey {FIRST_NAME} — quick note…",
+        "wait_in_days": 0,
+        "thread_reply": false
+      },
+      {
+        "email_subject": "Re: Hello",
+        "order": 2,
+        "email_body": "Bumping this — thoughts?",
+        "wait_in_days": 2,
+        "thread_reply": true
+      }
+    ]
+  },
+  "leads": {
+    "lead_list_id": 123,
+    "allow_parallel_sending": false
+  }
+}

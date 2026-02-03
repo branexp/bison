@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CampaignCreateSpec",
+  "description": "Schema for campaign.example.json (CampaignCreateSpec). NOTE: regenerate from pydantic once python deps are installed.",
+  "type": "object",
+  "properties": {}
+}
