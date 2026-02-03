@@ -59,7 +59,13 @@ class EmailBisonClient:
             "Authorization": f"Bearer {redact_token(self.settings.api_token)}",
         }
 
-    def request_json(self, method: str, path: str, *, json_body: Any | None = None) -> tuple[dict[str, Any], DebugInfo]:
+    def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Any | None = None,
+    ) -> tuple[dict[str, Any], DebugInfo]:
         url = f"{self.settings.base_url}{path}" if path.startswith("/") else path
         resp: httpx.Response | None = None
         try:
@@ -76,7 +82,13 @@ class EmailBisonClient:
         self._raise_for_status(resp)
         return _safe_json(resp), dbg
 
-    def _debug_summary(self, resp: httpx.Response | None, *, method: str, url: str) -> DebugInfo:
+    def _debug_summary(
+        self,
+        resp: httpx.Response | None,
+        *,
+        method: str,
+        url: str,
+    ) -> DebugInfo:
         request_id = None
         status = None
         if resp is not None:
@@ -104,27 +116,52 @@ class EmailBisonClient:
 
     # High-level helpers
 
-    def create_campaign(self, *, name: str, type: str = "outbound") -> tuple[dict[str, Any], DebugInfo]:
+    def create_campaign(
+        self,
+        *,
+        name: str,
+        type: str = "outbound",
+    ) -> tuple[dict[str, Any], DebugInfo]:
         payload: dict[str, Any] = {"name": name, "type": type}
         return self.request_json("POST", self.settings.campaigns_path, json_body=payload)
 
-    def update_campaign_settings(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+    def update_campaign_settings(
+        self,
+        campaign_id: int,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], DebugInfo]:
         path = f"{self.settings.campaigns_path}/{campaign_id}/update"
         return self.request_json("PATCH", path, json_body=payload)
 
-    def create_campaign_schedule(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+    def create_campaign_schedule(
+        self,
+        campaign_id: int,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], DebugInfo]:
         path = f"{self.settings.campaigns_path}/{campaign_id}/schedule"
         return self.request_json("POST", path, json_body=payload)
 
-    def create_sequence_steps_v11(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+    def create_sequence_steps_v11(
+        self,
+        campaign_id: int,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], DebugInfo]:
         path = f"{self.settings.campaigns_v11_path}/{campaign_id}/sequence-steps"
         return self.request_json("POST", path, json_body=payload)
 
-    def attach_lead_list(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+    def attach_lead_list(
+        self,
+        campaign_id: int,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], DebugInfo]:
         path = f"{self.settings.campaigns_path}/{campaign_id}/leads/attach-lead-list"
         return self.request_json("POST", path, json_body=payload)
 
-    def attach_leads(self, campaign_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any], DebugInfo]:
+    def attach_leads(
+        self,
+        campaign_id: int,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], DebugInfo]:
         path = f"{self.settings.campaigns_path}/{campaign_id}/leads/attach-leads"
         return self.request_json("POST", path, json_body=payload)
 

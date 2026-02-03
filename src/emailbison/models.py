@@ -4,7 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 CampaignType = Literal["outbound", "reply_followup"]
 
 
@@ -58,7 +57,7 @@ class SequenceStep(BaseModel):
     thread_reply: bool | None = None
 
     @model_validator(mode="after")
-    def _validate_variant(self) -> "SequenceStep":
+    def _validate_variant(self) -> SequenceStep:
         if self.variant_from_step is not None and self.variant_from_step_id is not None:
             raise ValueError("Use only one of variant_from_step or variant_from_step_id")
         return self
@@ -75,7 +74,7 @@ class LeadsSpec(BaseModel):
     allow_parallel_sending: bool = False
 
     @model_validator(mode="after")
-    def _validate_exclusive(self) -> "LeadsSpec":
+    def _validate_exclusive(self) -> LeadsSpec:
         if self.lead_list_id is not None and self.lead_ids is not None:
             raise ValueError("Use only one of lead_list_id or lead_ids")
         return self

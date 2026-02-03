@@ -14,7 +14,9 @@ def _settings() -> Settings:
 
 @respx.mock
 def test_auth_error() -> None:
-    respx.post("https://api.example.com/api/campaigns").mock(return_value=Response(401, json={"error": "no"}))
+    respx.post("https://api.example.com/api/campaigns").mock(
+        return_value=Response(401, json={"error": "no"})
+    )
 
     client = EmailBisonClient(_settings())
     with pytest.raises(AuthError):
