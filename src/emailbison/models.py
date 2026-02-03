@@ -4,6 +4,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+
+class SenderEmailSelectSpec(BaseModel):
+    """Selector for choosing sender email accounts from the workspace."""
+
+    search: str | None = None
+    tag_ids: list[int] | None = None
+    excluded_tag_ids: list[int] | None = None
+    without_tags: bool | None = None
+
+    status: str | None = "Connected"
+    limit: int = Field(default=1, ge=1)
+
 CampaignType = Literal["outbound", "reply_followup"]
 
 
@@ -134,10 +146,31 @@ class CampaignCreateSpec(BaseModel):
     schedule: CampaignSchedule | None = None
     sequence: SequenceSpec | None = None
 
-    # Attach sender email accounts to the campaign. Repeatable.
+    # Attach sender email accounts to the campaign.
+    # Use either explicit IDs OR a selector.
     sender_email_ids: list[int] | None = Field(default=None, min_length=1)
+    sender_emails: SenderEmailSelectSpec | None = None
+
+    # If true, attempt to start sending after provisioning (maps to campaign resume).
+    start: bool = False
 
     leads: LeadsSpec | None = None
+
+    @model_validator(mode="after")
+    def _validate_sender_emails_exclusive(self) -> CampaignCreateSpec:
+        if self.sender_email_ids is not None and self.sender_emails is not None:
+            raise ValueError("Use only one of sender_email_ids or sender_emails")
+        return self
+
+
+class WorkflowStepResult(BaseModel):
+    name: str
+    ok: bool = True
+
+    method: str
+    url: str
+    status_code: int | None = None
+    request_id: str | None = None
 
 
 class CreateCampaignResult(BaseModel):
@@ -145,5 +178,17 @@ class CreateCampaignResult(BaseModel):
     name: str
     status: str | None = None
 
-    # Optional extra details
+    # What we attached/created during the workflow
+    sender_email_ids: list[int] | None = None
+    sequence_id: int | None = None
+    sequence_step_ids: list[int] | None = None
+
+    # Whether we attempted to start (resume) the campaign
+    started: bool = False
+    start_status: str | None = None
+
+    # Orchestration metadata (safe for logs)
+    steps: list[WorkflowStepResult] = Field(default_factory=list)
+
+    # Optional raw responses
     raw: dict | None = None

@@ -219,6 +219,85 @@
       "title": "LeadsSpec",
       "type": "object"
     },
+    "SenderEmailSelectSpec": {
+      "description": "Selector for choosing sender email accounts from the workspace.",
+      "properties": {
+        "excluded_tag_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excluded Tag Ids"
+        },
+        "limit": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "search": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Search"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "Connected",
+          "title": "Status"
+        },
+        "tag_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tag Ids"
+        },
+        "without_tags": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Without Tags"
+        }
+      },
+      "title": "SenderEmailSelectSpec",
+      "type": "object"
+    },
     "SequenceSpec": {
       "properties": {
         "sequence_steps": {
@@ -391,6 +470,17 @@
       "default": null,
       "title": "Sender Email Ids"
     },
+    "sender_emails": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SenderEmailSelectSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "sequence": {
       "anyOf": [
         {
@@ -412,6 +502,11 @@
         }
       ],
       "default": null
+    },
+    "start": {
+      "default": false,
+      "title": "Start",
+      "type": "boolean"
     },
     "type": {
       "default": "outbound",

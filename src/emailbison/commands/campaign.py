@@ -15,6 +15,7 @@ from ..models import (
     CreateCampaignResult,
     LeadsSpec,
     SequenceSpec,
+    WorkflowStepResult,
 )
 
 # Additional campaign lifecycle + management commands
@@ -49,17 +50,25 @@ from .campaign_admin import (
     resume_campaign as _resume_campaign,
 )
 from .campaign_admin import (
+    start_campaign as _start_campaign,
+)
+from .campaign_admin import (
     stop_future_emails as _stop_future_emails,
 )
 from .campaign_sequence import app as campaign_sequence_app
 
 app = typer.Typer(add_completion=False)
 
+
+class WorkflowValidationError(RuntimeError):
+    pass
+
 # Register lifecycle/management commands into the same `campaign` group.
 app.command("list")(_list_campaigns)
 app.command("get")(_get_campaign)
 app.command("pause")(_pause_campaign)
 app.command("resume")(_resume_campaign)
+app.command("start")(_start_campaign)
 app.command("archive")(_archive_campaign)
 
 app.command("sender-emails")(_campaign_sender_emails)
@@ -148,6 +157,17 @@ def create_campaign(
         "--sender-email-id",
         help="Attach sender email id (repeatable).",
     ),
+    # Behavior
+    start: bool = typer.Option(
+        False,
+        "--start",
+        help="Attempt to start sending after provisioning (resume).",
+    ),
+    force_start: bool = typer.Option(
+        False,
+        "--force-start",
+        help="Skip preflight checks when starting.",
+    ),
     # Config overrides
     base_url: str | None = typer.Option(None, "--base-url"),
 ) -> None:
@@ -158,6 +178,8 @@ def create_campaign(
 
     if file is not None:
         spec = _validate_spec(_load_json_file(file))
+        if start:
+            spec = spec.model_copy(update={"start": True})
     else:
         if not name:
             typer.echo("Missing --name (or provide --file)", err=True)
@@ -218,79 +240,363 @@ def create_campaign(
             leads=leads_obj,
             sequence=sequence_obj,
             sender_email_ids=sender_email_id or None,
+            start=start,
         )
+
+    steps: list[WorkflowStepResult] = []
+    campaign_id: int | None = None
+    sender_email_ids_attached: list[int] | None = None
+    sequence_id: int | None = None
+    sequence_step_ids: list[int] | None = None
 
     client = EmailBisonClient(settings, debug=debug)
     try:
         created_raw, dbg_create = client.create_campaign(name=spec.name, type=spec.type)
         campaign_id = _extract_id(created_raw)
+        steps.append(
+            WorkflowStepResult(
+                name="campaign.create",
+                method=dbg_create.method,
+                url=dbg_create.url,
+                status_code=dbg_create.status_code,
+                request_id=dbg_create.request_id,
+            )
+        )
 
         if spec.settings is not None:
-            client.update_campaign_settings(
+            _, dbg = client.update_campaign_settings(
                 campaign_id,
                 spec.settings.model_dump(exclude_none=True),
             )
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.update_settings",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
+            )
 
         if spec.schedule is not None:
-            client.create_campaign_schedule(
+            _, dbg = client.create_campaign_schedule(
                 campaign_id,
                 spec.schedule.model_dump(exclude_none=True),
+            )
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.schedule",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
             )
 
         if spec.sequence is not None:
             # API expects: {title, sequence_steps: [...]} (exclude None in each step)
-            steps = [
+            seq_steps = [
                 s.model_dump(exclude_none=True) for s in spec.sequence.sequence_steps
             ]
-            client.create_sequence_steps_v11(
+            seq_raw, dbg = client.create_sequence_steps_v11(
                 campaign_id,
-                {"title": spec.sequence.title, "sequence_steps": steps},
+                {"title": spec.sequence.title, "sequence_steps": seq_steps},
+            )
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.sequence.create",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
             )
 
+            data = seq_raw.get("data")
+            if isinstance(data, dict) and isinstance(data.get("id"), int):
+                sequence_id = int(data["id"])
+            if isinstance(data, dict) and isinstance(data.get("sequence_steps"), list):
+                ids: list[int] = []
+                for row in data["sequence_steps"]:
+                    if isinstance(row, dict) and isinstance(row.get("id"), int):
+                        ids.append(int(row["id"]))
+                sequence_step_ids = ids or None
+
+        sender_ids_to_attach: list[int] | None = None
         if spec.sender_email_ids is not None:
-            client.attach_sender_emails(
-                campaign_id,
-                sender_email_ids=spec.sender_email_ids,
+            sender_ids_to_attach = spec.sender_email_ids
+        elif spec.sender_emails is not None:
+            raw_sender, dbg = client.list_sender_emails(
+                search=spec.sender_emails.search,
+                tag_ids=spec.sender_emails.tag_ids,
+                excluded_tag_ids=spec.sender_emails.excluded_tag_ids,
+                without_tags=spec.sender_emails.without_tags,
             )
+            steps.append(
+                WorkflowStepResult(
+                    name="sender_emails.list",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
+            )
+
+            data = raw_sender.get("data")
+            candidates: list[dict[str, Any]] = []
+            if isinstance(data, list):
+                for row in data:
+                    if not isinstance(row, dict):
+                        continue
+                    if not isinstance(row.get("id"), int):
+                        continue
+                    if spec.sender_emails.status is not None:
+                        if str(row.get("status")) != str(spec.sender_emails.status):
+                            continue
+                    candidates.append(row)
+
+            candidates.sort(key=lambda r: int(r["id"]))
+            sender_ids_to_attach = [
+                int(r["id"]) for r in candidates[: int(spec.sender_emails.limit)]
+            ]
+            if not sender_ids_to_attach:
+                raise WorkflowValidationError(
+                    "No sender emails matched sender_emails selector. "
+                    "Try `emailbison sender-emails list` to inspect available accounts."
+                )
+
+        if sender_ids_to_attach:
+            _, dbg = client.attach_sender_emails(
+                campaign_id,
+                sender_email_ids=sender_ids_to_attach,
+            )
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.attach_sender_emails",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
+            )
+            sender_email_ids_attached = sender_ids_to_attach
 
         if spec.leads is not None:
             if spec.leads.lead_list_id is not None:
-                client.attach_lead_list(
+                _, dbg = client.attach_lead_list(
                     campaign_id,
                     {
                         "lead_list_id": spec.leads.lead_list_id,
                         "allow_parallel_sending": spec.leads.allow_parallel_sending,
                     },
                 )
+                steps.append(
+                    WorkflowStepResult(
+                        name="campaign.attach_lead_list",
+                        method=dbg.method,
+                        url=dbg.url,
+                        status_code=dbg.status_code,
+                        request_id=dbg.request_id,
+                    )
+                )
             elif spec.leads.lead_ids is not None:
-                client.attach_leads(
+                _, dbg = client.attach_leads(
                     campaign_id,
                     {
                         "lead_ids": spec.leads.lead_ids,
                         "allow_parallel_sending": spec.leads.allow_parallel_sending,
                     },
                 )
+                steps.append(
+                    WorkflowStepResult(
+                        name="campaign.attach_leads",
+                        method=dbg.method,
+                        url=dbg.url,
+                        status_code=dbg.status_code,
+                        request_id=dbg.request_id,
+                    )
+                )
+
+        started = False
+        start_status: str | None = None
+        if spec.start:
+            missing: list[str] = []
+
+            details_raw, dbg = client.campaign_details(campaign_id)
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.details",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
+            )
+
+            data = details_raw.get("data")
+            total_leads = None
+            if isinstance(data, dict) and isinstance(data.get("total_leads"), int):
+                total_leads = int(data.get("total_leads"))
+            if not total_leads:
+                missing.append("no leads attached")
+
+            senders_raw, dbg = client.get_campaign_sender_emails(campaign_id)
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.sender_emails",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
+            )
+            senders = senders_raw.get("data")
+            if not isinstance(senders, list) or len(senders) == 0:
+                missing.append("no sender emails attached")
+
+            seq_raw, dbg = client.get_sequence_steps_v11(campaign_id)
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.sequence.get",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
+            )
+            seq_data = seq_raw.get("data")
+            seq_steps_data = None
+            if isinstance(seq_data, dict):
+                seq_steps_data = seq_data.get("sequence_steps")
+            if not isinstance(seq_steps_data, list) or len(seq_steps_data) == 0:
+                missing.append("no sequence steps")
+
+            if missing and not force_start:
+                raise WorkflowValidationError(
+                    "Refusing to start campaign (preflight failed): " + ", ".join(missing)
+                )
+
+            _, dbg = client.resume_campaign(campaign_id)
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.resume",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
+            )
+
+            details_raw2, dbg = client.campaign_details(campaign_id)
+            steps.append(
+                WorkflowStepResult(
+                    name="campaign.details_after_start",
+                    method=dbg.method,
+                    url=dbg.url,
+                    status_code=dbg.status_code,
+                    request_id=dbg.request_id,
+                )
+            )
+            start_status = _extract_status(details_raw2)
+            started = True
 
         result = CreateCampaignResult(
             id=campaign_id,
             name=spec.name,
             status=_extract_status(created_raw),
+            sender_email_ids=sender_email_ids_attached,
+            sequence_id=sequence_id,
+            sequence_step_ids=sequence_step_ids,
+            started=started,
+            start_status=start_status,
+            steps=steps,
             raw=created_raw,
         )
 
+    except WorkflowValidationError as e:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "error": {
+                            "type": type(e).__name__,
+                            "message": str(e),
+                        },
+                        "campaign_id": campaign_id,
+                        "steps": [s.model_dump() for s in steps],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo(str(e), err=True)
+        raise typer.Exit(code=2) from e
     except AuthError as e:
-        typer.echo(str(e), err=True)
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "error": {"type": type(e).__name__, "message": str(e)},
+                        "campaign_id": campaign_id,
+                        "steps": [s.model_dump() for s in steps],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
     except NetworkError as e:
-        typer.echo(str(e), err=True)
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "error": {"type": type(e).__name__, "message": str(e)},
+                        "campaign_id": campaign_id,
+                        "steps": [s.model_dump() for s in steps],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo(str(e), err=True)
         raise typer.Exit(code=4) from e
     except ApiError as e:
-        typer.echo(f"{e} Details: {json.dumps(e.details, indent=2)}", err=True)
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "error": {
+                            "type": type(e).__name__,
+                            "message": str(e),
+                            "status_code": e.status_code,
+                            "details": e.details,
+                        },
+                        "campaign_id": campaign_id,
+                        "steps": [s.model_dump() for s in steps],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo(f"{e} Details: {json.dumps(e.details, indent=2)}", err=True)
         raise typer.Exit(code=3) from e
     except typer.Exit:
         raise
     except Exception as e:
-        typer.echo(f"Unexpected error: {e}", err=True)
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "error": {"type": type(e).__name__, "message": str(e)},
+                        "campaign_id": campaign_id,
+                        "steps": [s.model_dump() for s in steps],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo(f"Unexpected error: {e}", err=True)
         raise typer.Exit(code=5) from e
     finally:
         client.close()

@@ -165,6 +165,111 @@ def resume_campaign(
         client.close()
 
 
+@app.command("start")
+def start_campaign(
+    ctx: typer.Context,
+    campaign_id: int = typer.Argument(...),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Skip preflight checks (unsafe).",
+    ),
+    base_url: str | None = typer.Option(None, "--base-url"),
+) -> None:
+    """Start a campaign (maps to resume). Performs basic safety checks by default."""
+
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+
+    client = _client_from_env(base_url=base_url, debug=debug)
+    try:
+        missing: list[str] = []
+
+        details_raw, _ = client.campaign_details(campaign_id)
+        data = details_raw.get("data")
+        total_leads = None
+        sequence_id = None
+        status = None
+        if isinstance(data, dict):
+            if isinstance(data.get("total_leads"), int):
+                total_leads = int(data.get("total_leads"))
+            if isinstance(data.get("sequence_id"), int):
+                sequence_id = int(data.get("sequence_id"))
+            if isinstance(data.get("status"), str):
+                status = str(data.get("status"))
+
+        if not total_leads:
+            missing.append("no leads attached")
+
+        senders_raw, _ = client.get_campaign_sender_emails(campaign_id)
+        sender_count = 0
+        if isinstance(senders_raw.get("data"), list):
+            sender_count = len(senders_raw.get("data"))
+        if sender_count == 0:
+            missing.append("no sender emails attached")
+
+        seq_raw, _ = client.get_sequence_steps_v11(campaign_id)
+        step_count = 0
+        seq_data = seq_raw.get("data")
+        if isinstance(seq_data, dict) and isinstance(seq_data.get("sequence_steps"), list):
+            step_count = len(seq_data.get("sequence_steps"))
+        if step_count == 0:
+            missing.append("no sequence steps")
+
+        preflight = {
+            "ok": len(missing) == 0,
+            "missing": missing,
+            "campaign": {
+                "id": campaign_id,
+                "status": status,
+                "sequence_id": sequence_id,
+                "total_leads": total_leads,
+            },
+            "sender_emails_count": sender_count,
+            "sequence_steps_count": step_count,
+        }
+
+        if missing and not force:
+            if json_output:
+                typer.echo(json.dumps({"preflight": preflight}, indent=2))
+            else:
+                typer.echo(
+                    "Refusing to start campaign (preflight failed): " + ", ".join(missing),
+                    err=True,
+                )
+            raise typer.Exit(code=2)
+
+        resume_raw, _ = client.resume_campaign(campaign_id)
+        details_after_raw, _ = client.campaign_details(campaign_id)
+
+        payload = {
+            "preflight": preflight,
+            "resume": resume_raw,
+            "campaign": details_after_raw,
+        }
+
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            new_status = None
+            d2 = details_after_raw.get("data")
+            if isinstance(d2, dict) and isinstance(d2.get("status"), str):
+                new_status = str(d2.get("status"))
+            typer.echo(f"id={campaign_id} started=true status={new_status or 'unknown'}")
+
+    except AuthError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=3) from e
+    except NetworkError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=4) from e
+    except ApiError as e:
+        typer.echo(f"{e} Details: {json.dumps(e.details, indent=2)}", err=True)
+        raise typer.Exit(code=3) from e
+    finally:
+        client.close()
+
+
 @app.command("archive")
 def archive_campaign(
     ctx: typer.Context,

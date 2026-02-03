@@ -24,3 +24,21 @@ def test_sequence_requires_steps() -> None:
 def test_sender_email_ids_non_empty_if_present() -> None:
     with pytest.raises(ValidationError):
         CampaignCreateSpec.model_validate({"name": "x", "sender_email_ids": []})
+
+
+def test_sender_email_selector_exclusive() -> None:
+    with pytest.raises(ValidationError):
+        CampaignCreateSpec.model_validate(
+            {
+                "name": "x",
+                "sender_email_ids": [1],
+                "sender_emails": {"search": "x", "limit": 1},
+            }
+        )
+
+
+def test_sender_email_selector_limit_ge_1() -> None:
+    with pytest.raises(ValidationError):
+        CampaignCreateSpec.model_validate(
+            {"name": "x", "sender_emails": {"search": "x", "limit": 0}}
+        )

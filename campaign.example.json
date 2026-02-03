@@ -42,7 +42,12 @@
       }
     ]
   },
-  "sender_email_ids": [1, 2],
+  "sender_emails": {
+    "search": "example",
+    "status": "Connected",
+    "limit": 2
+  },
+  "start": false,
   "leads": {
     "lead_list_id": 123,
     "allow_parallel_sending": false

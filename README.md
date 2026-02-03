@@ -89,7 +89,9 @@ emailbison sender-emails list --help
 
 ### Create a campaign (file-driven, one-shot)
 
-Include `sender_email_ids` in your JSON to make the campaign fully ready (no follow-up attach step):
+To make a campaign fully ready (no follow-up attach step), include either:
+- `sender_email_ids` (explicit), or
+- `sender_emails` (selector: search/tags/limit + optional status filter)
 
 ```bash
 emailbison campaign create --file campaign.example.json
@@ -121,7 +123,8 @@ emailbison campaign create \
   --lead-list-id 123 \
   --schedule-timezone America/New_York \
   --schedule-start 09:00 \
-  --schedule-end 17:00
+  --schedule-end 17:00 \
+  --start
 ```
 
 ### Other commands
@@ -141,6 +144,9 @@ emailbison --json campaign get 138
 # lifecycle
 emailbison campaign pause 138
 emailbison campaign resume 138
+emailbison campaign start 138
+# uses preflight checks by default; override with --force.
+emailbison campaign start 138 --force
 emailbison campaign archive 138
 
 # sender emails
@@ -165,7 +171,7 @@ emailbison campaign stop-future-emails 138 --lead-id 123 --lead-id 456
 ### Output formats
 
 - Default: concise human output
-- `--json`: machine-readable JSON
+- `--json`: machine-readable JSON (includes an orchestration-friendly `steps[]` list with endpoint URLs/status/request_id)
 
 ### Debugging
 
