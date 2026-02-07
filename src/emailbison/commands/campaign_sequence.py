@@ -107,9 +107,7 @@ def sequence_get(
 def sequence_set(
     ctx: typer.Context,
     campaign_id: int = typer.Argument(...),
-    file: Path = typer.Option(
-        ..., "--file", help="JSON file containing {title, sequence_steps}."
-    ),
+    file: Path = typer.Option(..., "--file", help="JSON file containing {title, sequence_steps}."),
     base_url: str | None = typer.Option(None, "--base-url"),
 ) -> None:
     """Create sequence steps from scratch for a campaign (v1.1)."""

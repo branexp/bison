@@ -81,6 +81,7 @@ retries = 2
 emailbison --help
 emailbison campaign --help
 emailbison campaign create --help
+emailbison campaign create-batch --help
 emailbison campaign list --help
 emailbison campaign get --help
 emailbison campaign sequence --help
@@ -125,6 +126,26 @@ emailbison campaign create \
   --schedule-start 09:00 \
   --schedule-end 17:00 \
   --start
+```
+
+### Create district campaigns in bulk
+
+Create one campaign per district CSV in a directory, with skip-and-continue behavior:
+
+```bash
+emailbison campaign create-batch \
+  --dir district_leads \
+  --sequence-file sequence.json \
+  --settings-file settings.json \
+  --schedule-file schedule.json \
+  --sender-email-id 1 \
+  --sender-email-id 2
+```
+
+Preview only:
+
+```bash
+emailbison campaign create-batch --dir district_leads --dry-run
 ```
 
 ### Other commands

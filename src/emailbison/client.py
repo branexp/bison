@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -47,7 +48,6 @@ class EmailBisonClient:
             headers={
                 "Authorization": f"Bearer {self.settings.api_token}",
                 "Accept": "application/json",
-                "Content-Type": "application/json",
             },
         )
 
@@ -77,10 +77,12 @@ class EmailBisonClient:
             if json_body is None:
                 resp = self._client.request(method, path, **request_kwargs)
             else:
+                headers = {"Content-Type": "application/json"}
                 resp = self._client.request(
                     method,
                     path,
                     content=json.dumps(json_body),
+                    headers=headers,
                     **request_kwargs,
                 )
         except httpx.TimeoutException as e:
@@ -108,9 +110,7 @@ class EmailBisonClient:
 
     def _raise_for_status(self, resp: httpx.Response) -> None:
         if resp.status_code in (401, 403):
-            raise AuthError(
-                "Auth failed (401/403). Set EMAILBISON_API_TOKEN or config api_token."
-            )
+            raise AuthError("Auth failed (401/403). Set EMAILBISON_API_TOKEN or config api_token.")
         if resp.status_code == 429:
             retry_after = resp.headers.get("retry-after")
             msg = "Rate limited (429)."
@@ -361,6 +361,70 @@ class EmailBisonClient:
     def archive_campaign(self, campaign_id: int) -> tuple[dict[str, Any], DebugInfo]:
         path = f"{self.settings.campaigns_path}/{campaign_id}/archive"
         return self.request_json("PATCH", path)
+
+    def upload_leads_csv(
+        self,
+        *,
+        name: str,
+        csv_path: Path,
+        columns_to_map: dict[str, str],
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        url = f"{self.settings.base_url}/api/leads/bulk/csv"
+        resp: httpx.Response | None = None
+
+        headers = {
+            "Authorization": f"Bearer {self.settings.api_token}",
+            "Accept": "application/json",
+        }
+        form_data: dict[str, str] = {"name": name}
+        for field_name, column_name in columns_to_map.items():
+            form_data[f"columnsToMap[0][{field_name}]"] = column_name
+
+        try:
+            with csv_path.open("rb") as fh:
+                files = {"csv": (csv_path.name, fh, "text/csv")}
+                resp = self._client.request(
+                    "POST",
+                    "/api/leads/bulk/csv",
+                    headers=headers,
+                    data=form_data,
+                    files=files,
+                )
+        except FileNotFoundError as e:
+            raise NetworkError(f"CSV file not found: {csv_path}") from e
+        except httpx.TimeoutException as e:
+            raise NetworkError("Network timeout calling EmailBison") from e
+        except httpx.HTTPError as e:
+            raise NetworkError("Network error calling EmailBison") from e
+
+        dbg = self._debug_summary(resp, method="POST", url=url)
+        self._raise_for_status(resp)
+        return _safe_json(resp), dbg
+
+    def get_lead_list(
+        self,
+        lead_list_id: int,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        candidate_paths = [
+            f"/api/leads/lists/{lead_list_id}",
+            f"/api/lead-lists/{lead_list_id}",
+        ]
+        last_error: ApiError | None = None
+
+        for path in candidate_paths:
+            try:
+                return self.request_json("GET", path)
+            except ApiError as e:
+                last_error = e
+                if e.status_code == 404:
+                    continue
+                raise
+
+        raise ApiError(
+            f"Unable to fetch lead list {lead_list_id}; no supported endpoint found.",
+            status_code=last_error.status_code if last_error else None,
+            details=last_error.details if last_error else None,
+        )
 
 
 def _safe_json(resp: httpx.Response) -> dict[str, Any]:

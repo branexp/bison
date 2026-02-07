@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
 import json
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +65,21 @@ app = typer.Typer(add_completion=False)
 
 class WorkflowValidationError(RuntimeError):
     pass
+
+
+LEAD_LIST_PENDING_STATUSES = {"unprocessed", "processing", "pending", "queued"}
+LEAD_LIST_FAILED_STATUSES = {"failed", "error"}
+LEAD_LIST_POLL_INTERVAL_SECONDS = 2.0
+LEAD_LIST_POLL_TIMEOUT_SECONDS = 300.0
+
+
+@dataclass(frozen=True)
+class BatchFilePlan:
+    path: Path
+    campaign_name: str
+    lead_count: int
+    columns_to_map: dict[str, str]
+
 
 # Register lifecycle/management commands into the same `campaign` group.
 app.command("list")(_list_campaigns)
@@ -295,9 +313,7 @@ def create_campaign(
 
         if spec.sequence is not None:
             # API expects: {title, sequence_steps: [...]} (exclude None in each step)
-            seq_steps = [
-                s.model_dump(exclude_none=True) for s in spec.sequence.sequence_steps
-            ]
+            seq_steps = [s.model_dump(exclude_none=True) for s in spec.sequence.sequence_steps]
             seq_raw, dbg = client.create_sequence_steps_v11(
                 campaign_id,
                 {"title": spec.sequence.title, "sequence_steps": seq_steps},
@@ -621,6 +637,213 @@ def create_campaign(
             typer.echo(f"debug: request_id={dbg_create.request_id}", err=True)
 
 
+@app.command("create-batch")
+def create_batch_campaigns(
+    ctx: typer.Context,
+    dir: Path = typer.Option(
+        ...,
+        "--dir",
+        help="Directory containing district-segmented CSV files.",
+    ),
+    sequence_file: Path | None = typer.Option(
+        None,
+        "--sequence-file",
+        help="JSON file containing {title, sequence_steps}.",
+    ),
+    sender_email_id: list[int] | None = typer.Option(
+        None,
+        "--sender-email-id",
+        help="Attach sender email id (repeatable).",
+    ),
+    settings_file: Path | None = typer.Option(
+        None,
+        "--settings-file",
+        help="JSON file containing campaign settings payload.",
+    ),
+    schedule_file: Path | None = typer.Option(
+        None,
+        "--schedule-file",
+        help="JSON file containing campaign schedule payload.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without API calls."),
+    base_url: str | None = typer.Option(None, "--base-url"),
+) -> None:
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+
+    if not dir.exists() or not dir.is_dir():
+        typer.echo(f"Directory not found: {dir}", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        settings_obj: CampaignSettings | None = None
+        if settings_file is not None:
+            settings_obj = CampaignSettings.model_validate(_load_json_file(settings_file))
+
+        schedule_obj: CampaignSchedule | None = None
+        if schedule_file is not None:
+            schedule_obj = CampaignSchedule.model_validate(_load_json_file(schedule_file))
+
+        sequence_obj: SequenceSpec | None = None
+        if sequence_file is not None:
+            sequence_obj = SequenceSpec.model_validate(_load_json_file(sequence_file))
+
+        if not dry_run and not sender_email_id:
+            raise WorkflowValidationError(
+                "Missing --sender-email-id (repeatable) unless --dry-run is used."
+            )
+
+        plans: list[BatchFilePlan] = _build_batch_plans(dir)
+        if not plans:
+            raise WorkflowValidationError(f"No CSV files found in {dir}")
+    except WorkflowValidationError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=2) from e
+    except Exception as e:
+        typer.echo(f"Validation error: {e}", err=True)
+        raise typer.Exit(code=2) from e
+
+    if dry_run:
+        payload = {
+            "dry_run": True,
+            "summary": {
+                "total_processed": len(plans),
+                "succeeded": len(plans),
+                "failed": 0,
+                "leads_loaded": sum(p.lead_count for p in plans),
+            },
+            "files": [
+                {
+                    "csv": str(p.path),
+                    "campaign_name": p.campaign_name,
+                    "lead_count": p.lead_count,
+                }
+                for p in plans
+            ],
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            for p in plans:
+                typer.echo(
+                    f"[DRY-RUN] csv={p.path.name} campaign={p.campaign_name} leads={p.lead_count}"
+                )
+            typer.echo(
+                "summary: total_processed={total_processed} succeeded={succeeded} "
+                "failed={failed} leads_loaded={leads_loaded}".format(**payload["summary"])
+            )
+        return
+
+    settings = _load_settings_or_exit(base_url=base_url)
+    client = EmailBisonClient(settings, debug=debug)
+
+    total_processed = 0
+    succeeded = 0
+    failed = 0
+    leads_loaded = 0
+    file_results: list[dict[str, Any]] = []
+
+    try:
+        for plan in plans:
+            total_processed += 1
+            try:
+                upload_raw, _ = client.upload_leads_csv(
+                    name=plan.campaign_name,
+                    csv_path=plan.path,
+                    columns_to_map=plan.columns_to_map,
+                )
+                lead_list_id, initial_status = _extract_lead_list_info(upload_raw)
+                lead_list_status = _wait_for_lead_list_processing(
+                    client=client,
+                    lead_list_id=lead_list_id,
+                    initial_status=initial_status,
+                )
+
+                created_raw, _ = client.create_campaign(name=plan.campaign_name, type="outbound")
+                campaign_id = _extract_id(created_raw)
+
+                if settings_obj is not None:
+                    client.update_campaign_settings(
+                        campaign_id,
+                        settings_obj.model_dump(exclude_none=True),
+                    )
+                if schedule_obj is not None:
+                    client.create_campaign_schedule(
+                        campaign_id,
+                        schedule_obj.model_dump(exclude_none=True),
+                    )
+                if sequence_obj is not None:
+                    seq_steps = [
+                        s.model_dump(exclude_none=True) for s in sequence_obj.sequence_steps
+                    ]
+                    client.create_sequence_steps_v11(
+                        campaign_id,
+                        {"title": sequence_obj.title, "sequence_steps": seq_steps},
+                    )
+                if sender_email_id:
+                    client.attach_sender_emails(
+                        campaign_id,
+                        sender_email_ids=sender_email_id,
+                    )
+
+                client.attach_lead_list(
+                    campaign_id,
+                    {"lead_list_id": lead_list_id, "allow_parallel_sending": False},
+                )
+
+                succeeded += 1
+                leads_loaded += plan.lead_count
+                file_results.append(
+                    {
+                        "csv": str(plan.path),
+                        "campaign_name": plan.campaign_name,
+                        "campaign_id": campaign_id,
+                        "lead_list_id": lead_list_id,
+                        "lead_list_status": lead_list_status,
+                        "lead_count": plan.lead_count,
+                        "ok": True,
+                    }
+                )
+                if not json_output:
+                    typer.echo(
+                        f"ok csv={plan.path.name} campaign_id={campaign_id} "
+                        f"lead_list_id={lead_list_id} leads={plan.lead_count}"
+                    )
+            except (ApiError, AuthError, NetworkError, ValueError, WorkflowValidationError) as e:
+                failed += 1
+                file_results.append(
+                    {
+                        "csv": str(plan.path),
+                        "campaign_name": plan.campaign_name,
+                        "lead_count": plan.lead_count,
+                        "ok": False,
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                    }
+                )
+                if not json_output:
+                    typer.echo(f"error csv={plan.path.name}: {e}", err=True)
+                continue
+    finally:
+        client.close()
+
+    summary = {
+        "total_processed": total_processed,
+        "succeeded": succeeded,
+        "failed": failed,
+        "leads_loaded": leads_loaded,
+    }
+    payload = {"summary": summary, "files": file_results}
+
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(
+            "summary: total_processed={total_processed} succeeded={succeeded} "
+            "failed={failed} leads_loaded={leads_loaded}".format(**summary)
+        )
+
+
 def _load_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         typer.echo(f"File not found: {path}", err=True)
@@ -656,3 +879,180 @@ def _extract_status(raw: dict[str, Any]) -> str | None:
     if isinstance(data, dict) and isinstance(data.get("status"), str):
         return data.get("status")
     return None
+
+
+def _build_batch_plans(dir_path: Path) -> list[BatchFilePlan]:
+    plans: list[BatchFilePlan] = []
+    for csv_path in sorted(dir_path.glob("*.csv")):
+        plans.append(_build_batch_plan(csv_path))
+    return plans
+
+
+def _build_batch_plan(csv_path: Path) -> BatchFilePlan:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        if not reader.fieldnames:
+            raise WorkflowValidationError(f"CSV has no header row: {csv_path}")
+
+        first_name_col = _pick_csv_column(
+            reader.fieldnames,
+            ["first_name", "first name", "firstname", "first"],
+        )
+        last_name_col = _pick_csv_column(
+            reader.fieldnames,
+            ["last_name", "last name", "lastname", "last"],
+        )
+        email_col = _pick_csv_column(
+            reader.fieldnames,
+            ["email", "email_address", "email address", "emailwork"],
+        )
+        if first_name_col is None or last_name_col is None or email_col is None:
+            raise WorkflowValidationError(
+                f"CSV missing required columns (first_name,last_name,email): {csv_path}"
+            )
+
+        lead_count = 0
+        district_name: str | None = None
+        for row in reader:
+            if not isinstance(row, dict):
+                continue
+            if any(str(v).strip() for v in row.values() if v is not None):
+                lead_count += 1
+            if district_name is None:
+                district_name = _extract_district_name_from_row(row)
+
+    campaign_name = district_name or _campaign_name_from_path(csv_path)
+    if lead_count <= 0:
+        raise WorkflowValidationError(f"CSV contains no lead rows: {csv_path}")
+
+    return BatchFilePlan(
+        path=csv_path,
+        campaign_name=campaign_name,
+        lead_count=lead_count,
+        columns_to_map={
+            "first_name": first_name_col,
+            "last_name": last_name_col,
+            "email": email_col,
+        },
+    )
+
+
+def _pick_csv_column(fieldnames: list[str], aliases: list[str]) -> str | None:
+    normalized_map = {name.strip().lower(): name for name in fieldnames}
+    for alias in aliases:
+        chosen = normalized_map.get(alias.strip().lower())
+        if chosen:
+            return chosen
+    return None
+
+
+def _extract_district_name_from_row(row: dict[str, Any]) -> str | None:
+    keys = {
+        "district",
+        "district_name",
+        "districtname",
+        "district name",
+        "company",
+        "organization",
+    }
+    for key, value in row.items():
+        if value is None:
+            continue
+        if str(key).strip().lower() in keys:
+            cleaned = str(value).strip()
+            if cleaned:
+                return cleaned
+    return None
+
+
+def _campaign_name_from_path(csv_path: Path) -> str:
+    stem = csv_path.stem.replace("_", " ").replace("-", " ").strip()
+    return stem or csv_path.name
+
+
+def _extract_lead_list_info(raw: dict[str, Any]) -> tuple[int, str | None]:
+    candidates: list[dict[str, Any]] = []
+    data = raw.get("data")
+    if isinstance(data, dict):
+        candidates.append(data)
+        lead_list = data.get("lead_list")
+        if isinstance(lead_list, dict):
+            candidates.append(lead_list)
+    lead_list_top = raw.get("lead_list")
+    if isinstance(lead_list_top, dict):
+        candidates.append(lead_list_top)
+    candidates.append(raw)
+
+    lead_list_id: int | None = None
+    status: str | None = None
+    for candidate in candidates:
+        if lead_list_id is None:
+            lead_list_id = _coerce_int(candidate.get("lead_list_id"))
+        if lead_list_id is None:
+            lead_list_id = _coerce_int(candidate.get("id"))
+        if status is None and isinstance(candidate.get("status"), str):
+            status = str(candidate.get("status"))
+        if lead_list_id is not None and status is not None:
+            break
+
+    if lead_list_id is None:
+        raise ValueError(f"Could not extract lead list id from response: {raw}")
+    return lead_list_id, status
+
+
+def _extract_lead_list_status(raw: dict[str, Any]) -> str | None:
+    candidates: list[dict[str, Any]] = []
+    data = raw.get("data")
+    if isinstance(data, dict):
+        candidates.append(data)
+        lead_list = data.get("lead_list")
+        if isinstance(lead_list, dict):
+            candidates.append(lead_list)
+    candidates.append(raw)
+
+    for candidate in candidates:
+        status = candidate.get("status")
+        if isinstance(status, str):
+            return status
+    return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, str):
+        parsed = value.strip()
+        if parsed.isdigit():
+            return int(parsed)
+    return None
+
+
+def _wait_for_lead_list_processing(
+    *,
+    client: EmailBisonClient,
+    lead_list_id: int,
+    initial_status: str | None,
+) -> str:
+    status = initial_status
+    if status and status.strip().lower() in LEAD_LIST_FAILED_STATUSES:
+        raise WorkflowValidationError(f"Lead list {lead_list_id} failed immediately: {status}")
+    if status and status.strip().lower() not in LEAD_LIST_PENDING_STATUSES:
+        return status
+
+    start = time.monotonic()
+    while (time.monotonic() - start) <= LEAD_LIST_POLL_TIMEOUT_SECONDS:
+        raw, _ = client.get_lead_list(lead_list_id)
+        status = _extract_lead_list_status(raw)
+        if status is None:
+            time.sleep(LEAD_LIST_POLL_INTERVAL_SECONDS)
+            continue
+        normalized = status.strip().lower()
+        if normalized in LEAD_LIST_FAILED_STATUSES:
+            raise WorkflowValidationError(f"Lead list {lead_list_id} processing failed: {status}")
+        if normalized not in LEAD_LIST_PENDING_STATUSES:
+            return status
+        time.sleep(LEAD_LIST_POLL_INTERVAL_SECONDS)
+
+    raise WorkflowValidationError(
+        f"Timed out waiting for lead list {lead_list_id} to finish processing."
+    )

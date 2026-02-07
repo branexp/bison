@@ -113,9 +113,9 @@ def test_campaign_stats_replies_stop_future_emails() -> None:
     respx.get("https://api.example.com/api/campaigns/123/replies").mock(
         return_value=Response(200, json={"data": [{"id": 9, "subject": "hi"}]})
     )
-    respx.post(
-        "https://api.example.com/api/campaigns/123/leads/stop-future-emails"
-    ).mock(return_value=Response(200, json={"data": {"success": True}}))
+    respx.post("https://api.example.com/api/campaigns/123/leads/stop-future-emails").mock(
+        return_value=Response(200, json={"data": {"success": True}})
+    )
 
     client = EmailBisonClient(_settings())
 
@@ -176,4 +176,40 @@ def test_sequence_get_set_update() -> None:
     raw, _ = client.update_sequence_steps_v11(55, {"title": "x", "sequence_steps": []})
     assert raw["data"]["id"] == 55
 
+    client.close()
+
+
+@respx.mock
+def test_upload_leads_csv(tmp_path) -> None:
+    csv_path = tmp_path / "district.csv"
+    csv_path.write_text("first_name,last_name,email\nA,B,a@example.com\n", encoding="utf-8")
+
+    route = respx.post("https://api.example.com/api/leads/bulk/csv").mock(
+        return_value=Response(200, json={"data": {"id": 321, "status": "Unprocessed"}})
+    )
+
+    client = EmailBisonClient(_settings())
+    raw, _ = client.upload_leads_csv(
+        name="District A",
+        csv_path=csv_path,
+        columns_to_map={"first_name": "first_name", "last_name": "last_name", "email": "email"},
+    )
+    assert raw["data"]["id"] == 321
+    assert route.called
+    assert "multipart/form-data" in route.calls[0].request.headers.get("content-type", "")
+    client.close()
+
+
+@respx.mock
+def test_get_lead_list_fallback_endpoint() -> None:
+    respx.get("https://api.example.com/api/leads/lists/77").mock(
+        return_value=Response(404, json={"error": "not found"})
+    )
+    respx.get("https://api.example.com/api/lead-lists/77").mock(
+        return_value=Response(200, json={"data": {"id": 77, "status": "Processed"}})
+    )
+
+    client = EmailBisonClient(_settings())
+    raw, _ = client.get_lead_list(77)
+    assert raw["data"]["id"] == 77
     client.close()

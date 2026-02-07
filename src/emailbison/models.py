@@ -16,6 +16,7 @@ class SenderEmailSelectSpec(BaseModel):
     status: str | None = "Connected"
     limit: int = Field(default=1, ge=1)
 
+
 CampaignType = Literal["outbound", "reply_followup"]
 
 
