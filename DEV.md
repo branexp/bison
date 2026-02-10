@@ -65,7 +65,10 @@ eb campaign list
 
 ## CI
 
-**None** — no GitHub Actions workflows yet.
+GitHub Actions: `.github/workflows/ci.yml`
+- Runs on push/PR to `main`
+- Python 3.11 + 3.12 matrix
+- Steps: ruff check, ruff format --check, pytest
 
 ## Key Env Vars
 
