@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 import respx
 from httpx import Response
@@ -127,6 +129,33 @@ def test_campaign_stats_replies_stop_future_emails() -> None:
 
     raw, _ = client.stop_future_emails_for_leads(123, lead_ids=[1, 2, 3])
     assert raw["data"]["success"] is True
+
+    client.close()
+
+
+@respx.mock
+def test_list_campaigns_filters_and_stats_payload() -> None:
+    list_route = respx.get("https://api.example.com/api/campaigns").mock(
+        return_value=Response(200, json={"data": [{"id": 1, "name": "A"}]})
+    )
+    stats_route = respx.post("https://api.example.com/api/campaigns/1/stats").mock(
+        return_value=Response(200, json={"data": {"emails_sent": "1"}})
+    )
+
+    client = EmailBisonClient(_settings())
+
+    raw, _ = client.list_campaigns(status="active", tag_ids=[10, 20])
+    assert raw["data"][0]["id"] == 1
+    assert list_route.called
+    list_payload = json.loads(list_route.calls[0].request.content.decode())
+    assert list_payload["status"] == "active"
+    assert list_payload["tag_ids"] == [10, 20]
+
+    raw, _ = client.campaign_stats(1, start_date="2024-07-01", end_date="2024-07-19")
+    assert raw["data"]["emails_sent"] == "1"
+    assert stats_route.called
+    stats_payload = json.loads(stats_route.calls[0].request.content.decode())
+    assert stats_payload == {"start_date": "2024-07-01", "end_date": "2024-07-19"}
 
     client.close()
 

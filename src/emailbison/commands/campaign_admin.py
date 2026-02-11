@@ -46,6 +46,42 @@ def _dump_or_human(
     typer.echo(payload)
 
 
+def _coerce_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                return int(float(value))
+            except ValueError:
+                return 0
+    return 0
+
+
+def _extract_metric(data: dict[str, Any], keys: tuple[str, ...]) -> int:
+    for key in keys:
+        if key in data:
+            return _coerce_int(data.get(key))
+    return 0
+
+
+def _format_table(headers: list[str], rows: list[list[str]]) -> list[str]:
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            widths[idx] = max(widths[idx], len(str(cell)))
+
+    def fmt(row: list[str]) -> str:
+        return " | ".join(str(cell).ljust(widths[idx]) for idx, cell in enumerate(row))
+
+    sep = "-+-".join("-" * width for width in widths)
+    return [fmt(headers), sep] + [fmt(row) for row in rows]
+
+
 @app.command("list")
 def list_campaigns(
     ctx: typer.Context,
@@ -73,6 +109,162 @@ def list_campaigns(
                 lines.append(f"id={cid} status={st} name={name}")
 
         _dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
+
+    except AuthError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=3) from e
+    except NetworkError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=4) from e
+    except ApiError as e:
+        typer.echo(f"{e} Details: {json.dumps(e.details, indent=2)}", err=True)
+        raise typer.Exit(code=3) from e
+    finally:
+        client.close()
+
+
+@app.command("summary")
+def campaign_summary(
+    ctx: typer.Context,
+    start_date: str = typer.Option(..., "--start-date", help="YYYY-MM-DD"),
+    end_date: str = typer.Option(..., "--end-date", help="YYYY-MM-DD"),
+    status: str | None = typer.Option(None, "--status"),
+    tag_ids: list[int] | None = typer.Option(None, "--tag-id", help="Repeatable."),
+    base_url: str | None = typer.Option(None, "--base-url"),
+) -> None:
+    """Aggregate campaign stats across a date range."""
+
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+
+    client = _client_from_env(base_url=base_url, debug=debug)
+    try:
+        raw, _ = client.list_campaigns(status=status, tag_ids=tag_ids or None)
+        data = raw.get("data")
+        campaigns = [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+        stat_keys = {
+            "sent": ("emails_sent", "sent"),
+            "delivered": ("emails_delivered", "delivered"),
+            "opened": ("emails_opened", "opened"),
+            "clicked": ("emails_clicked", "clicked"),
+            "replied": ("emails_replied", "replied"),
+            "bounced": ("emails_bounced", "bounced"),
+        }
+
+        totals = {key: 0 for key in stat_keys}
+        rows_payload: list[dict[str, Any]] = []
+        skipped: list[int] = []
+
+        for row in campaigns:
+            campaign_id = row.get("id")
+            if not isinstance(campaign_id, int):
+                typer.echo(f"Warning: skipping campaign with invalid id: {campaign_id}", err=True)
+                continue
+
+            name = row.get("name")
+            status_value = row.get("status")
+
+            try:
+                stats_raw, _ = client.campaign_stats(
+                    campaign_id, start_date=start_date, end_date=end_date
+                )
+            except AuthError as e:
+                typer.echo(
+                    f"Warning: failed to fetch stats for campaign {campaign_id}: {e}",
+                    err=True,
+                )
+                skipped.append(campaign_id)
+                continue
+            except NetworkError as e:
+                typer.echo(
+                    f"Warning: failed to fetch stats for campaign {campaign_id}: {e}",
+                    err=True,
+                )
+                skipped.append(campaign_id)
+                continue
+            except ApiError as e:
+                typer.echo(
+                    f"Warning: failed to fetch stats for campaign {campaign_id}: {e} "
+                    f"Details: {json.dumps(e.details, indent=2)}",
+                    err=True,
+                )
+                skipped.append(campaign_id)
+                continue
+
+            stats_data = stats_raw.get("data")
+            if not isinstance(stats_data, dict):
+                stats_data = {}
+
+            metrics = {key: _extract_metric(stats_data, keys) for key, keys in stat_keys.items()}
+            for key, value in metrics.items():
+                totals[key] += value
+
+            rows_payload.append(
+                {
+                    "campaign_id": campaign_id,
+                    "name": name,
+                    "status": status_value,
+                    **metrics,
+                }
+            )
+
+        payload = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "status": status,
+            "tag_ids": tag_ids or None,
+            "campaigns": rows_payload,
+            "summary": totals,
+            "skipped_campaign_ids": skipped,
+        }
+
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            headers = [
+                "campaign_id",
+                "name",
+                "status",
+                "sent",
+                "delivered",
+                "opened",
+                "clicked",
+                "replied",
+                "bounced",
+            ]
+            table_rows: list[list[str]] = []
+            for row in rows_payload:
+                table_rows.append(
+                    [
+                        str(row.get("campaign_id", "")),
+                        str(row.get("name") or ""),
+                        str(row.get("status") or ""),
+                        str(row.get("sent", 0)),
+                        str(row.get("delivered", 0)),
+                        str(row.get("opened", 0)),
+                        str(row.get("clicked", 0)),
+                        str(row.get("replied", 0)),
+                        str(row.get("bounced", 0)),
+                    ]
+                )
+
+            table_rows.append(
+                [
+                    "TOTAL",
+                    "",
+                    "",
+                    str(totals["sent"]),
+                    str(totals["delivered"]),
+                    str(totals["opened"]),
+                    str(totals["clicked"]),
+                    str(totals["replied"]),
+                    str(totals["bounced"]),
+                ]
+            )
+
+            for line in _format_table(headers, table_rows):
+                typer.echo(line)
 
     except AuthError as e:
         typer.echo(str(e), err=True)

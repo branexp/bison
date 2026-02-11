@@ -38,6 +38,9 @@ from .campaign_admin import (
     campaign_stats as _campaign_stats,
 )
 from .campaign_admin import (
+    campaign_summary as _campaign_summary,
+)
+from .campaign_admin import (
     get_campaign as _get_campaign,
 )
 from .campaign_admin import (
@@ -94,6 +97,7 @@ app.command("attach-sender-emails")(_attach_sender_emails)
 app.command("remove-sender-emails")(_remove_sender_emails)
 
 app.command("stats")(_campaign_stats)
+app.command("summary")(_campaign_summary)
 app.command("replies")(_campaign_replies)
 app.command("stop-future-emails")(_stop_future_emails)
 
