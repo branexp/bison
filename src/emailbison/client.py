@@ -378,7 +378,7 @@ class EmailBisonClient:
         }
         form_data: dict[str, str] = {"name": name}
         for field_name, column_name in columns_to_map.items():
-            form_data[f"columnsToMap[0][{field_name}]"] = column_name
+            form_data[f"columnsToMap[{field_name}]"] = column_name
 
         try:
             with csv_path.open("rb") as fh:

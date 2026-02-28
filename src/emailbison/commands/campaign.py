@@ -757,11 +757,10 @@ def create_batch_campaigns(
                     columns_to_map=plan.columns_to_map,
                 )
                 lead_list_id, initial_status = _extract_lead_list_info(upload_raw)
-                lead_list_status = _wait_for_lead_list_processing(
-                    client=client,
-                    lead_list_id=lead_list_id,
-                    initial_status=initial_status,
-                )
+                # Skip polling — EmailBison allows immediate attachment even when
+                # status is "Unprocessed". The get_lead_list endpoint may not exist
+                # on all instances.
+                lead_list_status = initial_status or "Unprocessed"
 
                 created_raw, _ = client.create_campaign(name=plan.campaign_name, type="outbound")
                 campaign_id = _extract_id(created_raw)
