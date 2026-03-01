@@ -246,7 +246,7 @@ def test_lead_update_vars_json(monkeypatch) -> None:
 
     result = runner.invoke(
         app,
-        ["lead", "update-vars", "user@example.com", "--json", '{"company": "Acme"}'],
+        ["lead", "update-vars", "user@example.com", "--vars", '{"company": "Acme"}'],
     )
     assert result.exit_code == 0
     assert route.called
@@ -299,7 +299,7 @@ def test_lead_update_vars_both_inputs(monkeypatch, tmp_path) -> None:
             "lead",
             "update-vars",
             "user@example.com",
-            "--json",
+            "--vars",
             '{"k": "v"}',
             "--file",
             str(vars_file),

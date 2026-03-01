@@ -60,7 +60,7 @@ def mark_interested(
         _err.print(f"[red]{e}[/red]")
         raise typer.Exit(code=4) from e
     except ApiError as e:
-        _err.print(f"[red]{e} Details: {json.dumps(e.details, indent=2)}[/red]")
+        _err.print(f"{e} Details: {json.dumps(e.details, indent=2)}", style="red", markup=False)
         raise typer.Exit(code=3) from e
     finally:
         client.close()
@@ -93,7 +93,7 @@ def mark_read(
         _err.print(f"[red]{e}[/red]")
         raise typer.Exit(code=4) from e
     except ApiError as e:
-        _err.print(f"[red]{e} Details: {json.dumps(e.details, indent=2)}[/red]")
+        _err.print(f"{e} Details: {json.dumps(e.details, indent=2)}", style="red", markup=False)
         raise typer.Exit(code=3) from e
     finally:
         client.close()

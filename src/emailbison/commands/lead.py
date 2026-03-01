@@ -64,7 +64,7 @@ def tag_add(
         _err.print(f"[red]{e}[/red]")
         raise typer.Exit(code=4) from e
     except ApiError as e:
-        _err.print(f"[red]{e} Details: {json.dumps(e.details, indent=2)}[/red]")
+        _err.print(f"{e} Details: {json.dumps(e.details, indent=2)}", style="red", markup=False)
         raise typer.Exit(code=3) from e
     finally:
         client.close()
@@ -98,7 +98,7 @@ def tag_remove(
         _err.print(f"[red]{e}[/red]")
         raise typer.Exit(code=4) from e
     except ApiError as e:
-        _err.print(f"[red]{e} Details: {json.dumps(e.details, indent=2)}[/red]")
+        _err.print(f"{e} Details: {json.dumps(e.details, indent=2)}", style="red", markup=False)
         raise typer.Exit(code=3) from e
     finally:
         client.close()
@@ -106,16 +106,16 @@ def tag_remove(
 
 def _load_vars(json_str: str | None, file_path: Path | None) -> dict[str, Any]:
     if json_str is not None and file_path is not None:
-        _err.print("[red]Provide only one of --json or --file, not both.[/red]")
+        _err.print("Provide only one of --vars or --file, not both.", style="red")
         raise typer.Exit(code=2)
     if json_str is not None:
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
-            _err.print(f"[red]Invalid JSON string: {e}[/red]")
+            _err.print(f"Invalid JSON string: {e}", style="red", markup=False)
             raise typer.Exit(code=2) from e
         if not isinstance(data, dict):
-            _err.print("[red]JSON input must be an object (dict).[/red]")
+            _err.print("JSON input must be an object (dict).", style="red")
             raise typer.Exit(code=2)
         return data
     if file_path is not None:
@@ -123,16 +123,16 @@ def _load_vars(json_str: str | None, file_path: Path | None) -> dict[str, Any]:
             content = file_path.read_text(encoding="utf-8")
             data = json.loads(content)
         except FileNotFoundError as e:
-            _err.print(f"[red]File not found: {file_path}[/red]")
+            _err.print(f"File not found: {file_path}", style="red", markup=False)
             raise typer.Exit(code=2) from e
         except json.JSONDecodeError as e:
-            _err.print(f"[red]Invalid JSON in file {file_path}: {e}[/red]")
+            _err.print(f"Invalid JSON in file {file_path}: {e}", style="red", markup=False)
             raise typer.Exit(code=2) from e
         if not isinstance(data, dict):
-            _err.print("[red]JSON file must contain an object (dict).[/red]")
+            _err.print("JSON file must contain an object (dict).", style="red")
             raise typer.Exit(code=2)
         return data
-    _err.print("[red]Provide either --json or --file.[/red]")
+    _err.print("Provide either --vars or --file.", style="red")
     raise typer.Exit(code=2)
 
 
@@ -140,7 +140,7 @@ def _load_vars(json_str: str | None, file_path: Path | None) -> dict[str, Any]:
 def update_vars(
     ctx: typer.Context,
     email: str = typer.Argument(..., help="Lead email address."),
-    json_str: str | None = typer.Option(None, "--json", help="JSON object of variables."),
+    json_str: str | None = typer.Option(None, "--vars", help="JSON object of variables."),
     file_path: Path | None = typer.Option(None, "--file", help="Path to JSON file of variables."),
     base_url: str | None = typer.Option(None, "--base-url"),
 ) -> None:
@@ -166,7 +166,7 @@ def update_vars(
         _err.print(f"[red]{e}[/red]")
         raise typer.Exit(code=4) from e
     except ApiError as e:
-        _err.print(f"[red]{e} Details: {json.dumps(e.details, indent=2)}[/red]")
+        _err.print(f"{e} Details: {json.dumps(e.details, indent=2)}", style="red", markup=False)
         raise typer.Exit(code=3) from e
     finally:
         client.close()

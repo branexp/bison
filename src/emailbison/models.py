@@ -203,8 +203,6 @@ class TagRemovePayload(_TagLeadsPayloadBase):
 class LeadUpdateVarsPayload(BaseModel):
     """Payload for PATCH /api/leads/{lead_id}"""
 
-    model_config = ConfigDict(extra="allow")
-
     variables: dict[str, object]
 
 
