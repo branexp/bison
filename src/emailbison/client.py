@@ -401,6 +401,29 @@ class EmailBisonClient:
         self._raise_for_status(resp)
         return _safe_json(resp), dbg
 
+    def list_campaign_leads(
+        self,
+        campaign_id: int,
+        *,
+        page: int = 1,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"{self.settings.campaigns_path}/{campaign_id}/leads"
+        return self.request_json("GET", path, params={"page": page})
+
+    def list_scheduled_emails(
+        self,
+        campaign_id: int,
+        *,
+        status: str = "sent",
+        page: int = 1,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = "/api/scheduled-emails"
+        return self.request_json(
+            "GET",
+            path,
+            params={"campaign_ids[]": campaign_id, "status": status, "page": page},
+        )
+
     def get_lead_list(
         self,
         lead_list_id: int,
