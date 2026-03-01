@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import json
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -708,6 +710,154 @@ def stop_future_emails(
     try:
         raw, _ = client.stop_future_emails_for_leads(campaign_id, lead_ids=lead_ids)
         _dump_or_human(payload=raw, json_output=json_output)
+    except AuthError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=3) from e
+    except NetworkError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=4) from e
+    except ApiError as e:
+        typer.echo(f"{e} Details: {json.dumps(e.details, indent=2)}", err=True)
+        raise typer.Exit(code=3) from e
+    finally:
+        client.close()
+
+
+@app.command("export-leads")
+def export_leads(
+    ctx: typer.Context,
+    campaign_id: int = typer.Argument(...),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output CSV file path (default: campaign_{id}_leads.csv).",
+    ),
+    base_url: str | None = typer.Option(None, "--base-url"),
+) -> None:
+    """Export all leads from a campaign to an enriched CSV file."""
+
+    debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    if json_output:
+        typer.echo(
+            "JSON output (--json) is not supported for 'export-leads'; "
+            "omit --json to export leads to CSV.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    out_path = output or Path(f"campaign_{campaign_id}_leads.csv")
+
+    client = _client_from_env(base_url=base_url, debug=debug)
+    try:
+        # 1. Fetch all leads (paginated)
+        leads: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            raw, _ = client.list_campaign_leads(campaign_id, page=page)
+            data = raw.get("data")
+            if isinstance(data, list):
+                leads.extend(data)
+            meta = raw.get("meta")
+            if not isinstance(meta, dict):
+                break
+            last_page = meta.get("last_page")
+            if not isinstance(last_page, int) or page >= last_page:
+                break
+            page += 1
+
+        # 2. Fetch sent scheduled emails to build last_sent_date mapping per lead
+        last_sent: dict[int, str] = {}
+        page = 1
+        while True:
+            raw, _ = client.list_scheduled_emails(campaign_id, status="sent", page=page)
+            data = raw.get("data")
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    lead_id = item.get("lead_id")
+                    sent_at = item.get("sent_at")
+                    if isinstance(lead_id, int) and isinstance(sent_at, str):
+                        existing = last_sent.get(lead_id)
+                        if existing is None or sent_at > existing:
+                            last_sent[lead_id] = sent_at
+            meta = raw.get("meta")
+            if not isinstance(meta, dict):
+                break
+            last_page = meta.get("last_page")
+            if not isinstance(last_page, int) or page >= last_page:
+                break
+            page += 1
+
+        # 3. Collect all unique custom variable names across leads, sorted alphabetically
+        seen_cv: set[str] = set()
+        custom_var_names: list[str] = []
+        for lead in leads:
+            for cv in lead.get("custom_variables") or []:
+                if isinstance(cv, dict):
+                    name = cv.get("name")
+                    if isinstance(name, str) and name not in seen_cv:
+                        seen_cv.add(name)
+                        custom_var_names.append(name)
+        custom_var_names.sort()
+
+        # 4. Write CSV
+        fixed_fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "status",
+            "emails_sent",
+            "opens",
+            "replies",
+            "tags",
+            "last_sent_date",
+        ]
+        fieldnames = fixed_fields + custom_var_names
+
+        with out_path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for lead in leads:
+                lead_id = lead.get("id")
+
+                tags_val = ", ".join(
+                    t.get("name", "") for t in (lead.get("tags") or []) if isinstance(t, dict)
+                )
+
+                overall_stats = lead.get("overall_stats") or {}
+                if not isinstance(overall_stats, dict):
+                    overall_stats = {}
+
+                cv_map: dict[str, str] = {}
+                for cv in lead.get("custom_variables") or []:
+                    if isinstance(cv, dict):
+                        name = cv.get("name")
+                        value = cv.get("value")
+                        if isinstance(name, str):
+                            cv_map[name] = str(value) if value is not None else ""
+
+                row: dict[str, Any] = {
+                    "id": lead_id,
+                    "email": lead.get("email", ""),
+                    "first_name": lead.get("first_name", ""),
+                    "last_name": lead.get("last_name", ""),
+                    "status": lead.get("status", ""),
+                    "emails_sent": overall_stats.get("emails_sent", ""),
+                    "opens": overall_stats.get("opens", ""),
+                    "replies": overall_stats.get("replies", ""),
+                    "tags": tags_val,
+                    "last_sent_date": last_sent.get(lead_id, "")
+                    if isinstance(lead_id, int)
+                    else "",
+                    **cv_map,
+                }
+                writer.writerow(row)
+
+        typer.echo(f"Exported {len(leads)} leads to {out_path}")
+
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
