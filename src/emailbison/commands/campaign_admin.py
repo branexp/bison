@@ -738,6 +738,14 @@ def export_leads(
     """Export all leads from a campaign to an enriched CSV file."""
 
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    if json_output:
+        typer.echo(
+            "JSON output (--json) is not supported for 'export-leads'; "
+            "omit --json to export leads to CSV.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     out_path = output or Path(f"campaign_{campaign_id}_leads.csv")
 
     client = _client_from_env(base_url=base_url, debug=debug)
