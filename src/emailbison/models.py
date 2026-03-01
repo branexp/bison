@@ -164,6 +164,50 @@ class CampaignCreateSpec(BaseModel):
         return self
 
 
+# ---------------------------------------------------------------------------
+# Reply models
+# ---------------------------------------------------------------------------
+
+
+class MarkReadPayload(BaseModel):
+    """Payload for PATCH /api/replies/{reply_id}/mark-as-read-or-unread"""
+
+    is_read: bool
+
+
+# ---------------------------------------------------------------------------
+# Tag models
+# ---------------------------------------------------------------------------
+
+
+class _TagLeadsPayloadBase(BaseModel):
+    """Shared base for tag-to-leads payloads."""
+
+    tag_id: int = Field(ge=1)
+    lead_ids: list[int] = Field(min_length=1)
+
+
+class TagAttachPayload(_TagLeadsPayloadBase):
+    """Payload for POST /api/tags/attach-to-leads"""
+
+
+class TagRemovePayload(_TagLeadsPayloadBase):
+    """Payload for POST /api/tags/remove-from-leads"""
+
+
+# ---------------------------------------------------------------------------
+# Lead models
+# ---------------------------------------------------------------------------
+
+
+class LeadUpdateVarsPayload(BaseModel):
+    """Payload for PATCH /api/leads/{lead_id}"""
+
+    model_config = ConfigDict(extra="allow")
+
+    variables: dict[str, object]
+
+
 class WorkflowStepResult(BaseModel):
     name: str
     ok: bool = True
