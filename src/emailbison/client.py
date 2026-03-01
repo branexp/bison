@@ -424,6 +424,107 @@ class EmailBisonClient:
             params={"campaign_ids[]": campaign_id, "status": status, "page": page},
         )
 
+    # -----------------------------------------------------------------------
+    # Lookup helpers
+    # -----------------------------------------------------------------------
+
+    def get_lead_by_email(self, email: str) -> int:
+        """Return the lead_id for the given email address, or raise ApiError."""
+        data, _ = self.request_json("GET", "/api/leads", params={"search": email})
+        leads = data.get("data") or []
+        if isinstance(leads, list):
+            for lead in leads:
+                if isinstance(lead, dict) and lead.get("email", "").lower() == email.lower():
+                    lead_id = lead.get("id")
+                    if lead_id is not None:
+                        return int(lead_id)
+        raise ApiError(f"Lead not found for email: {email}", status_code=404)
+
+    def get_latest_reply_for_lead(self, lead_id: int) -> int:
+        """Return the reply_id of the most recent reply for the given lead."""
+        data, _ = self.request_json("GET", f"/api/leads/{lead_id}/replies")
+        replies = data.get("data") or []
+        if isinstance(replies, list) and replies:
+            reply = replies[0]
+            if isinstance(reply, dict):
+                reply_id = reply.get("id")
+                if reply_id is not None:
+                    return int(reply_id)
+        raise ApiError(f"No replies found for lead: {lead_id}", status_code=404)
+
+    def get_tag_id_by_name(self, tag_name: str) -> int:
+        """Return the tag_id for the given tag name, or raise ApiError."""
+        data, _ = self.request_json("GET", "/api/tags")
+        tags = data.get("data") or []
+        if isinstance(tags, list):
+            for tag in tags:
+                if isinstance(tag, dict) and tag.get("name", "").lower() == tag_name.lower():
+                    tag_id = tag.get("id")
+                    if tag_id is not None:
+                        return int(tag_id)
+        raise ApiError(f"Tag not found: {tag_name}", status_code=404)
+
+    # -----------------------------------------------------------------------
+    # Reply status toggles
+    # -----------------------------------------------------------------------
+
+    def mark_reply_interested(self, reply_id: int) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"/api/replies/{reply_id}/mark-as-interested"
+        return self.request_json("PATCH", path)
+
+    def mark_reply_not_interested(self, reply_id: int) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"/api/replies/{reply_id}/mark-as-not-interested"
+        return self.request_json("PATCH", path)
+
+    def mark_reply_read(
+        self,
+        reply_id: int,
+        *,
+        is_read: bool,
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"/api/replies/{reply_id}/mark-as-read-or-unread"
+        return self.request_json("PATCH", path, json_body={"is_read": is_read})
+
+    # -----------------------------------------------------------------------
+    # Lead workspace tags
+    # -----------------------------------------------------------------------
+
+    def attach_tag_to_leads(
+        self,
+        *,
+        tag_id: int,
+        lead_ids: list[int],
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        return self.request_json(
+            "POST",
+            "/api/tags/attach-to-leads",
+            json_body={"tag_id": tag_id, "lead_ids": lead_ids},
+        )
+
+    def remove_tag_from_leads(
+        self,
+        *,
+        tag_id: int,
+        lead_ids: list[int],
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        return self.request_json(
+            "POST",
+            "/api/tags/remove-from-leads",
+            json_body={"tag_id": tag_id, "lead_ids": lead_ids},
+        )
+
+    # -----------------------------------------------------------------------
+    # Lead variable editing
+    # -----------------------------------------------------------------------
+
+    def update_lead_vars(
+        self,
+        lead_id: int,
+        variables: dict[str, Any],
+    ) -> tuple[dict[str, Any], DebugInfo]:
+        path = f"/api/leads/{lead_id}"
+        return self.request_json("PATCH", path, json_body={"variables": variables})
+
     def get_lead_list(
         self,
         lead_list_id: int,
