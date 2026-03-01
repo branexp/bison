@@ -824,9 +824,7 @@ def export_leads(
                 lead_id = lead.get("id")
 
                 tags_val = ", ".join(
-                    t.get("name", "")
-                    for t in (lead.get("tags") or [])
-                    if isinstance(t, dict)
+                    t.get("name", "") for t in (lead.get("tags") or []) if isinstance(t, dict)
                 )
 
                 overall_stats = lead.get("overall_stats") or {}
