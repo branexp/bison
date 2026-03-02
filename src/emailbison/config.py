@@ -21,6 +21,7 @@ class Settings:
     campaigns_path: str = "/api/campaigns"
     campaigns_v11_path: str = "/api/campaigns/v1.1"
     sender_emails_path: str = "/api/sender-emails"
+    database_url: str | None = None
 
 
 class ConfigError(RuntimeError):
@@ -82,6 +83,7 @@ def load_settings(
         "retries": os.getenv("EMAILBISON_RETRIES"),
         "default_timezone": os.getenv("EMAILBISON_DEFAULT_TIMEZONE"),
         "campaigns_path": os.getenv("EMAILBISON_CAMPAIGNS_PATH"),
+        "database_url": os.getenv("BISON_DATABASE_URL"),
     }
 
     def pick(key: str, explicit: Any) -> Any:
@@ -123,4 +125,5 @@ def load_settings(
         retries=retries_i,
         default_timezone=str(tz) if tz not in (None, "") else None,
         campaigns_path=str(cp) if cp not in (None, "") else "/api/campaigns",
+        database_url=str(env_cfg["database_url"]) if env_cfg.get("database_url") else None,
     )

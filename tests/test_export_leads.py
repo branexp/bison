@@ -34,32 +34,40 @@ def test_export_leads_happy_path(tmp_path, monkeypatch) -> None:
             "email": "alice@example.com",
             "first_name": "Alice",
             "last_name": "Smith",
+            "title": "Teacher",
+            "company": "Lincoln High",
             "status": "active",
             "overall_stats": {"emails_sent": 3, "opens": 2, "replies": 1},
             "tags": [{"name": "Interested"}, {"name": "Automated Reply"}],
             "custom_variables": [
                 {"name": "state", "value": "CA"},
-                {"name": "company", "value": "Acme"},
+                {"name": "district", "value": "LAUSD"},
             ],
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-07-12T08:00:00Z",
         },
         {
             "id": 2,
             "email": "bob@example.com",
             "first_name": "Bob",
             "last_name": "Jones",
+            "title": "",
+            "company": "",
             "status": "unsubscribed",
             "overall_stats": {"emails_sent": 1, "opens": 0, "replies": 0},
             "tags": [],
             "custom_variables": [
                 {"name": "state", "value": "TX"},
             ],
+            "created_at": "2024-02-01T00:00:00Z",
+            "updated_at": "2024-07-11T09:00:00Z",
         },
     ]
 
     sent_emails = [
-        {"lead_id": 1, "sent_at": "2024-07-10T10:00:00Z"},
-        {"lead_id": 1, "sent_at": "2024-07-12T08:00:00Z"},  # more recent
-        {"lead_id": 2, "sent_at": "2024-07-11T09:00:00Z"},
+        {"lead": {"id": 1}, "sent_at": "2024-07-10T10:00:00Z"},
+        {"lead": {"id": 1}, "sent_at": "2024-07-12T08:00:00Z"},  # more recent
+        {"lead": {"id": 2}, "sent_at": "2024-07-11T09:00:00Z"},
     ]
 
     respx.get("https://api.example.com/api/campaigns/42/leads").mock(
@@ -86,6 +94,8 @@ def test_export_leads_happy_path(tmp_path, monkeypatch) -> None:
     assert alice["email"] == "alice@example.com"
     assert alice["first_name"] == "Alice"
     assert alice["last_name"] == "Smith"
+    assert alice["title"] == "Teacher"
+    assert alice["company"] == "Lincoln High"
     assert alice["status"] == "active"
     assert alice["emails_sent"] == "3"
     assert alice["opens"] == "2"
@@ -93,16 +103,19 @@ def test_export_leads_happy_path(tmp_path, monkeypatch) -> None:
     assert "Interested" in alice["tags"]
     assert "Automated Reply" in alice["tags"]
     assert alice["last_sent_date"] == "2024-07-12T08:00:00Z"
-    assert alice["company"] == "Acme"
+    assert alice["created_at"] == "2024-01-01T00:00:00Z"
+    assert alice["updated_at"] == "2024-07-12T08:00:00Z"
     assert alice["state"] == "CA"
+    assert alice["district"] == "LAUSD"
 
     bob = rows[1]
     assert bob["email"] == "bob@example.com"
     assert bob["status"] == "unsubscribed"
     assert bob["tags"] == ""
     assert bob["last_sent_date"] == "2024-07-11T09:00:00Z"
+    assert bob["created_at"] == "2024-02-01T00:00:00Z"
     assert bob["state"] == "TX"
-    assert bob["company"] == ""  # not present for bob, defaulted to empty
+    assert bob["company"] == ""  # top-level company field, empty for bob
 
 
 @respx.mock
@@ -142,8 +155,8 @@ def test_export_leads_pagination(tmp_path, monkeypatch) -> None:
             Response(200, json=_leads_page(page2_leads, current_page=2, last_page=2)),
         ]
     )
-    sent_page1 = [{"lead_id": 10, "sent_at": "2024-07-10T10:00:00Z"}]
-    sent_page2 = [{"lead_id": 11, "sent_at": "2024-07-11T09:00:00Z"}]
+    sent_page1 = [{"lead": {"id": 10}, "sent_at": "2024-07-10T10:00:00Z"}]
+    sent_page2 = [{"lead": {"id": 11}, "sent_at": "2024-07-11T09:00:00Z"}]
     scheduled_route = respx.get("https://api.example.com/api/scheduled-emails").mock(
         side_effect=[
             Response(200, json=_scheduled_page(sent_page1, current_page=1, last_page=2)),
@@ -214,3 +227,57 @@ def test_export_leads_json_flag_rejected(monkeypatch) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["--json", "campaign", "export-leads", "42"])
     assert result.exit_code == 2
+
+
+@respx.mock
+def test_export_leads_colliding_custom_var_not_in_headers(tmp_path, monkeypatch) -> None:
+    """Custom variable named 'company' does not produce a duplicate header."""
+    monkeypatch.setenv("EMAILBISON_API_TOKEN", "secret")
+    monkeypatch.setenv("EMAILBISON_BASE_URL", "https://api.example.com")
+
+    leads = [
+        {
+            "id": 5,
+            "email": "x@example.com",
+            "first_name": "X",
+            "last_name": "Y",
+            "title": "Principal",
+            "company": "Lincoln High",
+            "status": "active",
+            "overall_stats": {},
+            "tags": [],
+            "custom_variables": [
+                {"name": "company", "value": "Acme"},  # collides with fixed field
+                {"name": "district", "value": "LAUSD"},
+            ],
+            "created_at": None,
+            "updated_at": None,
+        }
+    ]
+
+    respx.get("https://api.example.com/api/campaigns/10/leads").mock(
+        return_value=Response(200, json=_leads_page(leads))
+    )
+    respx.get("https://api.example.com/api/scheduled-emails").mock(
+        return_value=Response(200, json=_scheduled_page([]))
+    )
+
+    out_file = tmp_path / "leads.csv"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["campaign", "export-leads", "10", "--output", str(out_file)]
+    )
+
+    assert result.exit_code == 0, result.output
+    rows = list(csv.DictReader(out_file.open(encoding="utf-8")))
+    assert len(rows) == 1
+    row = rows[0]
+    # Fixed 'company' field should hold the top-level value
+    assert row["company"] == "Lincoln High"
+    # 'district' custom variable should be present
+    assert row["district"] == "LAUSD"
+    # There should be no duplicate headers: read raw first line of CSV
+    with out_file.open(encoding="utf-8") as fh:
+        header_line = fh.readline().rstrip("\n")
+    headers = header_line.split(",")
+    assert headers.count("company") == 1

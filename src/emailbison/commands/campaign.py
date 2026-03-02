@@ -41,6 +41,12 @@ from .campaign_admin import (
     campaign_summary as _campaign_summary,
 )
 from .campaign_admin import (
+    db_stats as _db_stats,
+)
+from .campaign_admin import (
+    export_all_leads as _export_all_leads,
+)
+from .campaign_admin import (
     export_leads as _export_leads,
 )
 from .campaign_admin import (
@@ -63,6 +69,9 @@ from .campaign_admin import (
 )
 from .campaign_admin import (
     stop_future_emails as _stop_future_emails,
+)
+from .campaign_admin import (
+    upload_leads as _upload_leads,
 )
 from .campaign_sequence import app as campaign_sequence_app
 
@@ -104,6 +113,9 @@ app.command("summary")(_campaign_summary)
 app.command("replies")(_campaign_replies)
 app.command("stop-future-emails")(_stop_future_emails)
 app.command("export-leads")(_export_leads)
+app.command("export-all-leads")(_export_all_leads)
+app.command("upload-leads")(_upload_leads)
+app.command("db-stats")(_db_stats)
 
 # Nested sequence management group
 app.add_typer(campaign_sequence_app, name="sequence")
