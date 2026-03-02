@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,8 @@ import typer
 
 from ..client import ApiError, AuthError, EmailBisonClient, NetworkError
 from ..config import ConfigError, load_settings
+from ..db import DatabaseError, init_db, upsert_leads
+from ..db import get_stats as get_db_stats
 
 app = typer.Typer(add_completion=False)
 
@@ -97,20 +100,38 @@ def list_campaigns(
 
     client = _client_from_env(base_url=base_url, debug=debug)
     try:
-        raw, _ = client.list_campaigns(search=search, status=status, tag_ids=tag_id or None)
+        all_campaigns: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            raw, _ = client.list_campaigns(
+                search=search, status=status, tag_ids=tag_id or None, page=page
+            )
+            data = raw.get("data")
+            if isinstance(data, list):
+                all_campaigns.extend(data)
+            meta = raw.get("meta")
+            if not isinstance(meta, dict):
+                break
+            last_page = meta.get("last_page")
+            if not isinstance(last_page, int) or page >= last_page:
+                break
+            page += 1
 
-        data = raw.get("data")
         lines: list[str] = []
-        if isinstance(data, list):
-            for row in data:
-                if not isinstance(row, dict):
-                    continue
-                cid = row.get("id")
-                name = row.get("name")
-                st = row.get("status")
-                lines.append(f"id={cid} status={st} name={name}")
+        for row in all_campaigns:
+            if not isinstance(row, dict):
+                continue
+            cid = row.get("id")
+            name = row.get("name")
+            st = row.get("status")
+            lines.append(f"id={cid} status={st} name={name}")
 
-        _dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
+        if json_output:
+            payload: dict[str, Any] = {"data": all_campaigns, "meta": {"total": len(all_campaigns)}}
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            for line in lines:
+                typer.echo(line)
 
     except AuthError as e:
         typer.echo(str(e), err=True)
@@ -776,7 +797,8 @@ def export_leads(
                 for item in data:
                     if not isinstance(item, dict):
                         continue
-                    lead_id = item.get("lead_id")
+                    lead_obj = item.get("lead")
+                    lead_id = lead_obj.get("id") if isinstance(lead_obj, dict) else None
                     sent_at = item.get("sent_at")
                     if isinstance(lead_id, int) and isinstance(sent_at, str):
                         existing = last_sent.get(lead_id)
@@ -808,12 +830,16 @@ def export_leads(
             "email",
             "first_name",
             "last_name",
+            "title",
+            "company",
             "status",
             "emails_sent",
             "opens",
             "replies",
             "tags",
             "last_sent_date",
+            "created_at",
+            "updated_at",
         ]
         fieldnames = fixed_fields + custom_var_names
 
@@ -844,6 +870,8 @@ def export_leads(
                     "email": lead.get("email", ""),
                     "first_name": lead.get("first_name", ""),
                     "last_name": lead.get("last_name", ""),
+                    "title": lead.get("title", ""),
+                    "company": lead.get("company", ""),
                     "status": lead.get("status", ""),
                     "emails_sent": overall_stats.get("emails_sent", ""),
                     "opens": overall_stats.get("opens", ""),
@@ -852,6 +880,8 @@ def export_leads(
                     "last_sent_date": last_sent.get(lead_id, "")
                     if isinstance(lead_id, int)
                     else "",
+                    "created_at": lead.get("created_at", ""),
+                    "updated_at": lead.get("updated_at", ""),
                     **cv_map,
                 }
                 writer.writerow(row)
@@ -869,3 +899,385 @@ def export_leads(
         raise typer.Exit(code=3) from e
     finally:
         client.close()
+
+
+@app.command("export-all-leads")
+def export_all_leads(
+    ctx: typer.Context,
+    output: Path = typer.Option(
+        "all_leads.csv",
+        "--output",
+        "-o",
+        help="Output CSV file path.",
+    ),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Filter campaigns by status (paused, completed, draft, etc.)",
+    ),
+    campaign_ids: str | None = typer.Option(
+        None,
+        "--campaign-ids",
+        help="Comma-separated list of campaign IDs to export (default: all with leads)",
+    ),
+    base_url: str | None = typer.Option(None, "--base-url"),
+) -> None:
+    """Export leads from all campaigns to a single CSV file."""
+    debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+
+    if json_output:
+        typer.echo("JSON output not supported for bulk export.", err=True)
+        raise typer.Exit(code=2)
+
+    client = _client_from_env(base_url=base_url, debug=debug)
+    try:
+        typer.echo("Fetching campaigns...", err=True)
+        all_campaign_list, _ = client.list_all_campaigns(status=status)
+
+        if campaign_ids:
+            requested_ids = {int(cid.strip()) for cid in campaign_ids.split(",")}
+            campaigns_to_export = [
+                c
+                for c in all_campaign_list
+                if c.get("id") in requested_ids and c.get("total_leads", 0) > 0
+            ]
+        else:
+            campaigns_to_export = [
+                c for c in all_campaign_list if c.get("total_leads", 0) > 0
+            ]
+
+        if not campaigns_to_export:
+            typer.echo("No campaigns with leads found.", err=True)
+            raise typer.Exit(code=0)
+
+        typer.echo(f"Exporting {len(campaigns_to_export)} campaigns...", err=True)
+
+        all_leads: dict[int, dict[str, Any]] = {}
+        lead_campaign_ids: dict[int, list[int]] = {}
+        all_custom_vars: set[str] = set()
+
+        for campaign in campaigns_to_export:
+            cid = campaign.get("id")
+            page = 1
+            while True:
+                raw, _ = client.list_campaign_leads(cid, page=page)
+                data = raw.get("data", [])
+                if not data:
+                    break
+                for lead in data:
+                    lead_id = lead.get("id")
+                    if lead_id is None:
+                        continue
+                    if lead_id not in lead_campaign_ids:
+                        lead_campaign_ids[lead_id] = []
+                    lead_campaign_ids[lead_id].append(cid)
+                    if lead_id not in all_leads:
+                        all_leads[lead_id] = lead
+                        for cv in lead.get("custom_variables") or []:
+                            if isinstance(cv, dict) and cv.get("name"):
+                                all_custom_vars.add(cv["name"])
+                meta = raw.get("meta", {})
+                if page >= meta.get("last_page", 1):
+                    break
+                page += 1
+
+        typer.echo("Fetching sent email data...", err=True)
+        last_sent: dict[int, str] = {}
+        for campaign in campaigns_to_export:
+            cid = campaign.get("id")
+            page = 1
+            while True:
+                raw, _ = client.list_scheduled_emails(cid, status="sent", page=page)
+                items = raw.get("data", [])
+                if not items:
+                    break
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    lead_obj = item.get("lead")
+                    item_lead_id = lead_obj.get("id") if isinstance(lead_obj, dict) else None
+                    sent_at = item.get("sent_at")
+                    if isinstance(item_lead_id, int) and isinstance(sent_at, str):
+                        existing = last_sent.get(item_lead_id)
+                        if existing is None or sent_at > existing:
+                            last_sent[item_lead_id] = sent_at
+                meta = raw.get("meta", {})
+                if page >= meta.get("last_page", 1):
+                    break
+                page += 1
+
+        fixed_fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "title",
+            "company",
+            "status",
+            "emails_sent",
+            "opens",
+            "replies",
+            "tags",
+            "last_sent_date",
+            "created_at",
+            "updated_at",
+            "campaign_ids",
+        ]
+        fieldnames = fixed_fields + sorted(all_custom_vars)
+
+        with output.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for lead_id, lead in all_leads.items():
+                stats = lead.get("overall_stats") or {}
+                if not isinstance(stats, dict):
+                    stats = {}
+                tags_val = ", ".join(
+                    t.get("name", "") for t in (lead.get("tags") or []) if isinstance(t, dict)
+                )
+                cv_map: dict[str, str] = {}
+                for cv in lead.get("custom_variables") or []:
+                    if isinstance(cv, dict):
+                        name = cv.get("name")
+                        value = cv.get("value")
+                        if isinstance(name, str):
+                            cv_map[name] = str(value) if value is not None else ""
+                row: dict[str, Any] = {
+                    "id": lead_id,
+                    "email": lead.get("email", ""),
+                    "first_name": lead.get("first_name", ""),
+                    "last_name": lead.get("last_name", ""),
+                    "title": lead.get("title", ""),
+                    "company": lead.get("company", ""),
+                    "status": lead.get("status", ""),
+                    "emails_sent": stats.get("emails_sent", ""),
+                    "opens": stats.get("opens", ""),
+                    "replies": stats.get("replies", ""),
+                    "tags": tags_val,
+                    "last_sent_date": last_sent.get(lead_id, ""),
+                    "created_at": lead.get("created_at", ""),
+                    "updated_at": lead.get("updated_at", ""),
+                    "campaign_ids": ",".join(str(c) for c in lead_campaign_ids.get(lead_id, [])),
+                    **cv_map,
+                }
+                writer.writerow(row)
+
+        typer.echo(
+            f"Exported {len(all_leads)} leads from {len(campaigns_to_export)} campaigns to {output}"
+        )
+
+    except AuthError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=3) from e
+    except NetworkError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=4) from e
+    except ApiError as e:
+        typer.echo(f"{e} Details: {json.dumps(e.details, indent=2)}", err=True)
+        raise typer.Exit(code=3) from e
+    finally:
+        client.close()
+
+
+@app.command("upload-leads")
+def upload_leads(
+    ctx: typer.Context,
+    campaign_id: int | None = typer.Argument(
+        None,
+        help="Single campaign ID to upload (omit for --all)",
+    ),
+    all_campaigns: bool = typer.Option(
+        False,
+        "--all",
+        help="Upload leads from all campaigns with leads.",
+    ),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Filter campaigns by status (when using --all).",
+    ),
+    init_schema: bool = typer.Option(
+        False,
+        "--init",
+        help="Initialize database schema before upload.",
+    ),
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="PostgreSQL connection URL (or set BISON_DATABASE_URL).",
+    ),
+    base_url: str | None = typer.Option(None, "--base-url"),
+) -> None:
+    """Upload exported lead data to a PostgreSQL database (Neon)."""
+    debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+
+    db_url = database_url or os.environ.get("BISON_DATABASE_URL")
+    if not db_url:
+        typer.echo(
+            "Database URL required. Set BISON_DATABASE_URL or use --database-url.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    if not campaign_id and not all_campaigns:
+        typer.echo("Provide a campaign ID or use --all to upload all campaigns.", err=True)
+        raise typer.Exit(code=2)
+
+    client = _client_from_env(base_url=base_url, debug=debug)
+    try:
+        if init_schema:
+            typer.echo("Initializing database schema...", err=True)
+            init_db(db_url)
+            typer.echo("Schema initialized.", err=True)
+
+        if all_campaigns:
+            typer.echo("Fetching campaigns...", err=True)
+            campaigns_data, _ = client.list_all_campaigns(status=status)
+            campaigns_to_upload = [
+                c for c in campaigns_data if c.get("total_leads", 0) > 0
+            ]
+        else:
+            raw, _ = client.campaign_details(campaign_id)
+            campaigns_to_upload = [raw.get("data", {})]
+
+        if not campaigns_to_upload:
+            typer.echo("No campaigns with leads found.", err=True)
+            raise typer.Exit(code=0)
+
+        typer.echo(f"Uploading {len(campaigns_to_upload)} campaigns...", err=True)
+
+        all_leads: dict[int, dict[str, Any]] = {}
+        lead_campaign_memberships: dict[int, list[dict[str, Any]]] = {}
+        last_sent: dict[int, str] = {}
+
+        for campaign in campaigns_to_upload:
+            cid = campaign.get("id")
+            campaign_name = campaign.get("name", "")
+
+            page = 1
+            while True:
+                raw, _ = client.list_campaign_leads(cid, page=page)
+                leads = raw.get("data", [])
+                if not leads:
+                    break
+                for lead in leads:
+                    lead_id = lead.get("id")
+                    if lead_id is None:
+                        continue
+                    stats = lead.get("overall_stats") or {}
+                    if not isinstance(stats, dict):
+                        stats = {}
+                    if lead_id not in lead_campaign_memberships:
+                        lead_campaign_memberships[lead_id] = []
+                    lead_campaign_memberships[lead_id].append(
+                        {
+                            "campaign_id": cid,
+                            "campaign_name": campaign_name,
+                            "emails_sent": stats.get("emails_sent", 0),
+                            "opens": stats.get("opens", 0),
+                            "replies": stats.get("replies", 0),
+                            "last_sent_date": None,
+                        }
+                    )
+                    if lead_id not in all_leads:
+                        cv_dict: dict[str, Any] = {}
+                        for cv in lead.get("custom_variables") or []:
+                            if isinstance(cv, dict) and cv.get("name"):
+                                cv_dict[cv["name"]] = cv.get("value")
+                        all_leads[lead_id] = {
+                            "id": lead_id,
+                            "email": lead.get("email", ""),
+                            "first_name": lead.get("first_name", ""),
+                            "last_name": lead.get("last_name", ""),
+                            "title": lead.get("title", ""),
+                            "company": lead.get("company", ""),
+                            "status": lead.get("status", "unverified"),
+                            "custom_variables": json.dumps(cv_dict),
+                            "created_at": lead.get("created_at"),
+                            "updated_at": lead.get("updated_at"),
+                        }
+                meta = raw.get("meta", {})
+                if page >= meta.get("last_page", 1):
+                    break
+                page += 1
+
+            page = 1
+            while True:
+                raw, _ = client.list_scheduled_emails(cid, status="sent", page=page)
+                items = raw.get("data", [])
+                if not items:
+                    break
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    lead_obj = item.get("lead")
+                    item_lead_id = lead_obj.get("id") if isinstance(lead_obj, dict) else None
+                    sent_at = item.get("sent_at")
+                    if isinstance(item_lead_id, int) and isinstance(sent_at, str):
+                        existing = last_sent.get(item_lead_id)
+                        if existing is None or sent_at > existing:
+                            last_sent[item_lead_id] = sent_at
+                meta = raw.get("meta", {})
+                if page >= meta.get("last_page", 1):
+                    break
+                page += 1
+
+        for lead_id, sent_date in last_sent.items():
+            if lead_id in lead_campaign_memberships:
+                for membership in lead_campaign_memberships[lead_id]:
+                    membership["last_sent_date"] = sent_date
+
+        leads_list = list(all_leads.values())
+        result = upsert_leads(db_url, leads_list, lead_campaign_memberships)
+
+        typer.echo(
+            f"Uploaded {result['leads_upserted']} leads "
+            f"with {result['campaign_memberships']} campaign memberships"
+        )
+
+    except DatabaseError as e:
+        typer.echo(f"Database error: {e}", err=True)
+        raise typer.Exit(code=5) from e
+    except AuthError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=3) from e
+    except NetworkError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=4) from e
+    except ApiError as e:
+        typer.echo(f"{e} Details: {json.dumps(e.details, indent=2)}", err=True)
+        raise typer.Exit(code=3) from e
+    finally:
+        client.close()
+
+
+@app.command("db-stats")
+def db_stats(
+    ctx: typer.Context,
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="PostgreSQL connection URL (or set BISON_DATABASE_URL).",
+    ),
+) -> None:
+    """Show database statistics."""
+    db_url = database_url or os.environ.get("BISON_DATABASE_URL")
+    if not db_url:
+        typer.echo(
+            "Database URL required. Set BISON_DATABASE_URL or use --database-url.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        stats = get_db_stats(db_url)
+        typer.echo(f"Total leads: {stats['total_leads']}")
+        typer.echo(f"Total campaigns: {stats['total_campaigns']}")
+        typer.echo(f"Total memberships: {stats['total_memberships']}")
+        typer.echo("By status:")
+        for st, count in stats["by_status"].items():
+            typer.echo(f"  {st}: {count}")
+    except DatabaseError as e:
+        typer.echo(f"Database error: {e}", err=True)
+        raise typer.Exit(code=5) from e

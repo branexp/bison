@@ -212,6 +212,7 @@ class EmailBisonClient:
         search: str | None = None,
         status: str | None = None,
         tag_ids: list[int] | None = None,
+        page: int | None = None,
     ) -> tuple[dict[str, Any], DebugInfo]:
         payload: dict[str, Any] = {}
         if search:
@@ -220,6 +221,8 @@ class EmailBisonClient:
             payload["status"] = status
         if tag_ids:
             payload["tag_ids"] = tag_ids
+        if page is not None:
+            payload["page"] = page
 
         # Docs show optional requestBody for GET (unusual, but supported by EmailBison).
         return self.request_json(
@@ -227,6 +230,36 @@ class EmailBisonClient:
             self.settings.campaigns_path,
             json_body=payload or None,
         )
+
+    def list_all_campaigns(
+        self,
+        *,
+        search: str | None = None,
+        status: str | None = None,
+        tag_ids: list[int] | None = None,
+    ) -> tuple[list[dict[str, Any]], list[DebugInfo]]:
+        """Fetch all campaigns across all pages."""
+        all_campaigns: list[dict[str, Any]] = []
+        debug_infos: list[DebugInfo] = []
+        page = 1
+
+        while True:
+            raw, dbg = self.list_campaigns(
+                search=search, status=status, tag_ids=tag_ids, page=page
+            )
+            debug_infos.append(dbg)
+            data = raw.get("data")
+            if isinstance(data, list):
+                all_campaigns.extend(data)
+            meta = raw.get("meta")
+            if not isinstance(meta, dict):
+                break
+            last_page = meta.get("last_page")
+            if not isinstance(last_page, int) or page >= last_page:
+                break
+            page += 1
+
+        return all_campaigns, debug_infos
 
     def get_campaign_sender_emails(
         self,
