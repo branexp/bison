@@ -227,3 +227,57 @@ def test_export_leads_json_flag_rejected(monkeypatch) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["--json", "campaign", "export-leads", "42"])
     assert result.exit_code == 2
+
+
+@respx.mock
+def test_export_leads_colliding_custom_var_not_in_headers(tmp_path, monkeypatch) -> None:
+    """Custom variable named 'company' does not produce a duplicate header."""
+    monkeypatch.setenv("EMAILBISON_API_TOKEN", "secret")
+    monkeypatch.setenv("EMAILBISON_BASE_URL", "https://api.example.com")
+
+    leads = [
+        {
+            "id": 5,
+            "email": "x@example.com",
+            "first_name": "X",
+            "last_name": "Y",
+            "title": "Principal",
+            "company": "Lincoln High",
+            "status": "active",
+            "overall_stats": {},
+            "tags": [],
+            "custom_variables": [
+                {"name": "company", "value": "Acme"},  # collides with fixed field
+                {"name": "district", "value": "LAUSD"},
+            ],
+            "created_at": None,
+            "updated_at": None,
+        }
+    ]
+
+    respx.get("https://api.example.com/api/campaigns/10/leads").mock(
+        return_value=Response(200, json=_leads_page(leads))
+    )
+    respx.get("https://api.example.com/api/scheduled-emails").mock(
+        return_value=Response(200, json=_scheduled_page([]))
+    )
+
+    out_file = tmp_path / "leads.csv"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["campaign", "export-leads", "10", "--output", str(out_file)]
+    )
+
+    assert result.exit_code == 0, result.output
+    rows = list(csv.DictReader(out_file.open(encoding="utf-8")))
+    assert len(rows) == 1
+    row = rows[0]
+    # Fixed 'company' field should hold the top-level value
+    assert row["company"] == "Lincoln High"
+    # 'district' custom variable should be present
+    assert row["district"] == "LAUSD"
+    # There should be no duplicate headers: read raw first line of CSV
+    with out_file.open(encoding="utf-8") as fh:
+        header_line = fh.readline().rstrip("\n")
+    headers = header_line.split(",")
+    assert headers.count("company") == 1

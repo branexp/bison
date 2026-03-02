@@ -100,22 +100,9 @@ def list_campaigns(
 
     client = _client_from_env(base_url=base_url, debug=debug)
     try:
-        all_campaigns: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            raw, _ = client.list_campaigns(
-                search=search, status=status, tag_ids=tag_id or None, page=page
-            )
-            data = raw.get("data")
-            if isinstance(data, list):
-                all_campaigns.extend(data)
-            meta = raw.get("meta")
-            if not isinstance(meta, dict):
-                break
-            last_page = meta.get("last_page")
-            if not isinstance(last_page, int) or page >= last_page:
-                break
-            page += 1
+        all_campaigns, _ = client.list_all_campaigns(
+            search=search, status=status, tag_ids=tag_id or None
+        )
 
         lines: list[str] = []
         for row in all_campaigns:
@@ -814,15 +801,12 @@ def export_leads(
 
         # 3. Collect all unique custom variable names across leads, sorted alphabetically
         seen_cv: set[str] = set()
-        custom_var_names: list[str] = []
         for lead in leads:
             for cv in lead.get("custom_variables") or []:
                 if isinstance(cv, dict):
                     name = cv.get("name")
-                    if isinstance(name, str) and name not in seen_cv:
+                    if isinstance(name, str):
                         seen_cv.add(name)
-                        custom_var_names.append(name)
-        custom_var_names.sort()
 
         # 4. Write CSV
         fixed_fields = [
@@ -841,6 +825,8 @@ def export_leads(
             "created_at",
             "updated_at",
         ]
+        fixed_fields_set = set(fixed_fields)
+        custom_var_names = sorted(name for name in seen_cv if name not in fixed_fields_set)
         fieldnames = fixed_fields + custom_var_names
 
         with out_path.open("w", encoding="utf-8", newline="") as fh:
@@ -862,7 +848,7 @@ def export_leads(
                     if isinstance(cv, dict):
                         name = cv.get("name")
                         value = cv.get("value")
-                        if isinstance(name, str):
+                        if isinstance(name, str) and name not in fixed_fields_set:
                             cv_map[name] = str(value) if value is not None else ""
 
                 row: dict[str, Any] = {
@@ -936,15 +922,29 @@ def export_all_leads(
         all_campaign_list, _ = client.list_all_campaigns(status=status)
 
         if campaign_ids:
-            requested_ids = {int(cid.strip()) for cid in campaign_ids.split(",")}
+            try:
+                requested_ids = {
+                    int(cid.strip()) for cid in campaign_ids.split(",") if cid.strip()
+                }
+            except ValueError:
+                typer.echo(
+                    "Invalid --campaign-ids: expected comma-separated integers, e.g. '1,2,3'.",
+                    err=True,
+                )
+                raise typer.Exit(code=2) from None
             campaigns_to_export = [
                 c
                 for c in all_campaign_list
-                if c.get("id") in requested_ids and c.get("total_leads", 0) > 0
+                if isinstance(c, dict)
+                and isinstance(c.get("id"), int)
+                and c["id"] in requested_ids
+                and c.get("total_leads", 0) > 0
             ]
         else:
             campaigns_to_export = [
-                c for c in all_campaign_list if c.get("total_leads", 0) > 0
+                c
+                for c in all_campaign_list
+                if isinstance(c, dict) and c.get("total_leads", 0) > 0
             ]
 
         if not campaigns_to_export:
@@ -959,6 +959,9 @@ def export_all_leads(
 
         for campaign in campaigns_to_export:
             cid = campaign.get("id")
+            if not isinstance(cid, int):
+                typer.echo(f"Skipping campaign with invalid id {cid!r}.", err=True)
+                continue
             page = 1
             while True:
                 raw, _ = client.list_campaign_leads(cid, page=page)
@@ -986,6 +989,8 @@ def export_all_leads(
         last_sent: dict[int, str] = {}
         for campaign in campaigns_to_export:
             cid = campaign.get("id")
+            if not isinstance(cid, int):
+                continue
             page = 1
             while True:
                 raw, _ = client.list_scheduled_emails(cid, status="sent", page=page)
@@ -1024,7 +1029,9 @@ def export_all_leads(
             "updated_at",
             "campaign_ids",
         ]
-        fieldnames = fixed_fields + sorted(all_custom_vars)
+        fixed_fields_set = set(fixed_fields)
+        custom_var_fields = sorted(name for name in all_custom_vars if name not in fixed_fields_set)
+        fieldnames = fixed_fields + custom_var_fields
 
         with output.open("w", encoding="utf-8", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
@@ -1041,7 +1048,7 @@ def export_all_leads(
                     if isinstance(cv, dict):
                         name = cv.get("name")
                         value = cv.get("value")
-                        if isinstance(name, str):
+                        if isinstance(name, str) and name not in fixed_fields_set:
                             cv_map[name] = str(value) if value is not None else ""
                 row: dict[str, Any] = {
                     "id": lead_id,
@@ -1135,11 +1142,21 @@ def upload_leads(
             typer.echo("Fetching campaigns...", err=True)
             campaigns_data, _ = client.list_all_campaigns(status=status)
             campaigns_to_upload = [
-                c for c in campaigns_data if c.get("total_leads", 0) > 0
+                c
+                for c in campaigns_data
+                if isinstance(c, dict) and c.get("total_leads", 0) > 0
             ]
         else:
             raw, _ = client.campaign_details(campaign_id)
-            campaigns_to_upload = [raw.get("data", {})]
+            campaign_data = raw.get("data")
+            if not isinstance(campaign_data, dict) or not isinstance(
+                campaign_data.get("id"), int
+            ):
+                typer.echo(
+                    f"Invalid campaign response for id {campaign_id}.", err=True
+                )
+                raise typer.Exit(code=3)
+            campaigns_to_upload = [campaign_data]
 
         if not campaigns_to_upload:
             typer.echo("No campaigns with leads found.", err=True)
@@ -1149,10 +1166,19 @@ def upload_leads(
 
         all_leads: dict[int, dict[str, Any]] = {}
         lead_campaign_memberships: dict[int, list[dict[str, Any]]] = {}
-        last_sent: dict[int, str] = {}
+        # Track last sent per (lead_id, campaign_id) so each membership gets correct value
+        last_sent: dict[tuple[int, int], str] = {}
 
         for campaign in campaigns_to_upload:
+            if not isinstance(campaign, dict):
+                typer.echo(
+                    f"Skipping campaign with unexpected type {type(campaign)!r}.", err=True
+                )
+                continue
             cid = campaign.get("id")
+            if not isinstance(cid, int):
+                typer.echo(f"Skipping campaign with invalid id {cid!r}.", err=True)
+                continue
             campaign_name = campaign.get("name", "")
 
             page = 1
@@ -1215,18 +1241,21 @@ def upload_leads(
                     item_lead_id = lead_obj.get("id") if isinstance(lead_obj, dict) else None
                     sent_at = item.get("sent_at")
                     if isinstance(item_lead_id, int) and isinstance(sent_at, str):
-                        existing = last_sent.get(item_lead_id)
+                        key = (item_lead_id, cid)
+                        existing = last_sent.get(key)
                         if existing is None or sent_at > existing:
-                            last_sent[item_lead_id] = sent_at
+                            last_sent[key] = sent_at
                 meta = raw.get("meta", {})
                 if page >= meta.get("last_page", 1):
                     break
                 page += 1
 
-        for lead_id, sent_date in last_sent.items():
-            if lead_id in lead_campaign_memberships:
-                for membership in lead_campaign_memberships[lead_id]:
-                    membership["last_sent_date"] = sent_date
+        for lead_id, memberships in lead_campaign_memberships.items():
+            for membership in memberships:
+                membership_cid = membership["campaign_id"]
+                key = (lead_id, membership_cid)
+                if key in last_sent:
+                    membership["last_sent_date"] = last_sent[key]
 
         leads_list = list(all_leads.values())
         result = upsert_leads(db_url, leads_list, lead_campaign_memberships)

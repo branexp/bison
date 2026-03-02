@@ -221,3 +221,97 @@ def test_db_stats_shows_output(mock_stats, monkeypatch) -> None:
     assert "Total memberships: 150" in result.output
     assert "active: 80" in result.output
     assert "unsubscribed: 20" in result.output
+
+
+@respx.mock
+@patch("emailbison.commands.campaign_admin.upsert_leads")
+def test_upload_leads_per_campaign_last_sent(mock_upsert, monkeypatch) -> None:
+    """last_sent_date for each membership is the most recent send in THAT campaign only."""
+    monkeypatch.setenv("EMAILBISON_API_TOKEN", "secret")
+    monkeypatch.setenv("EMAILBISON_BASE_URL", "https://api.example.com")
+    monkeypatch.setenv("BISON_DATABASE_URL", "postgresql://fake/db")
+
+    mock_upsert.return_value = {"leads_upserted": 1, "campaign_memberships": 2}
+
+    # Lead 100 appears in two campaigns
+    campaigns = [
+        {"id": 10, "name": "Camp A", "total_leads": 1},
+        {"id": 20, "name": "Camp B", "total_leads": 1},
+    ]
+    lead = {
+        "id": 100,
+        "email": "l@example.com",
+        "first_name": "L",
+        "last_name": "M",
+        "title": "",
+        "company": "",
+        "status": "active",
+        "overall_stats": {},
+        "custom_variables": [],
+        "created_at": None,
+        "updated_at": None,
+    }
+
+    # Campaign 10: sent 2024-07-10
+    sent_camp10 = [{"lead": {"id": 100}, "sent_at": "2024-07-10T00:00:00Z"}]
+    # Campaign 20: sent 2024-08-01 (more recent, different campaign)
+    sent_camp20 = [{"lead": {"id": 100}, "sent_at": "2024-08-01T00:00:00Z"}]
+
+    respx.get("https://api.example.com/api/campaigns").mock(
+        return_value=Response(200, json=_campaigns_page(campaigns))
+    )
+    respx.get("https://api.example.com/api/campaigns/10/leads").mock(
+        return_value=Response(200, json=_leads_page([lead]))
+    )
+    respx.get("https://api.example.com/api/campaigns/20/leads").mock(
+        return_value=Response(200, json=_leads_page([lead]))
+    )
+
+    def _scheduled_side_effect(request, route):
+        # Distinguish by campaign_ids[] param
+        if "campaign_ids%5B%5D=10" in str(request.url) or "campaign_ids[]=10" in str(
+            request.url
+        ):
+            return Response(200, json=_scheduled_page(sent_camp10))
+        return Response(200, json=_scheduled_page(sent_camp20))
+
+    respx.get("https://api.example.com/api/scheduled-emails").mock(
+        side_effect=_scheduled_side_effect
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["campaign", "upload-leads", "--all"])
+
+    assert result.exit_code == 0, result.output
+    mock_upsert.assert_called_once()
+
+    _, kwargs = mock_upsert.call_args
+    memberships = mock_upsert.call_args[0][2]  # lead_campaign_memberships
+
+    # Find memberships for lead 100
+    lead_memberships = memberships.get(100, [])
+    assert len(lead_memberships) == 2
+
+    by_cid = {m["campaign_id"]: m for m in lead_memberships}
+    # Each campaign should have its OWN last_sent_date, not the global max
+    assert by_cid[10]["last_sent_date"] == "2024-07-10T00:00:00Z"
+    assert by_cid[20]["last_sent_date"] == "2024-08-01T00:00:00Z"
+
+
+@respx.mock
+def test_export_all_leads_invalid_campaign_ids_flag(monkeypatch) -> None:
+    """--campaign-ids with non-integer values exits with code 2."""
+    monkeypatch.setenv("EMAILBISON_API_TOKEN", "secret")
+    monkeypatch.setenv("EMAILBISON_BASE_URL", "https://api.example.com")
+
+    respx.get("https://api.example.com/api/campaigns").mock(
+        return_value=Response(200, json=_campaigns_page([]))
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["campaign", "export-all-leads", "--campaign-ids", "abc,1"]
+    )
+
+    assert result.exit_code == 2
+    assert "Invalid --campaign-ids" in result.output
