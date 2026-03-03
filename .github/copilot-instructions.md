@@ -127,7 +127,7 @@ Do not invent new exit codes unless explicitly required and applied consistently
 ## Testing Guidelines
 - Test framework: `pytest`
 - HTTP mocking: `respx`
-- Current suite: 77 tests across 22 files
+- Test suite: pytest tests in the `tests/` directory
 - Core test files include:
   - `test_client.py`
   - `test_models.py`
@@ -157,8 +157,8 @@ When generating code:
 ## Audit Notes to Keep in Mind
 Known audit findings:
 - Large files to split over time:
-  - `commands/campaign_admin.py` (~1050 lines)
-  - `commands/campaign.py` (~800 lines)
+  - `commands/campaign_admin.py` (large, monolithic command module)
+  - `commands/campaign.py` (large, multi-responsibility command module)
 - Boundary issue:
   - some direct env reads exist in business logic; prefer centralized `Settings`
 - Testing gap:

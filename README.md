@@ -230,7 +230,7 @@ ruff check .
 
 ### Development Notes
 
-- **Test suite:** 77 tests across 22 files; tests cover client, models, and CLI commands.
+- **Test suite:** Dozens of tests covering client, models, and CLI commands.
 - **Recent refactor:** Introduced `commands/_shared.py` to consolidate CLI utilities and eliminated ~120 lines of duplicate code across command modules.
 - **Known gap:** `campaign_sequence.py` lacks direct test coverage (tracked for future work).
 - **Audit score:** 17/25 — strong implementation depth and test coverage; see `DEEP_MODULE_AUDIT.md` for details.

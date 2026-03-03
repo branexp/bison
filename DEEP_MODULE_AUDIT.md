@@ -17,7 +17,7 @@ The bison project is a CLI tool and SDK for the EmailBison email campaign platfo
 | **Interface Clarity** | 3 | 5 | Duplicated helper functions across modules |
 | **Boundary Enforcement** | 2 | 5 | Leaky abstractions, direct env reads |
 | **Implementation Depth** | 5 | 5 | Good separation of concerns at module level |
-| **Test Coverage** | 4 | 5 | 22 test files, good coverage |
+| **Test Coverage** | 4 | 5 | Around 75 automated tests across the `tests/` suite, good coverage |
 | **Error Propagation** | N/A | - | Not scored in analyzer |
 | **Observability** | N/A | - | Not scored in analyzer |
 | **Configuration Isolation** | N/A | - | Not scored in analyzer |
@@ -39,13 +39,13 @@ src/emailbison/
 ├── db.py                # PostgreSQL integration (188 lines) ✓
 ├── models.py            # Pydantic models (196 lines) ✓
 ├── utils/
-│   ├── __init__.py      # client_from_env helper
+│   ├── __init__.py      # Package marker (empty as of 2025-01-14)
 │   ├── redact.py        # Token redaction
 │   └── time.py          # Time utilities
 └── commands/
     ├── __init__.py      # Shared client_from_env helper
-    ├── campaign.py      # Campaign create/batch (800 lines) ⚠️ LARGE
-    ├── campaign_admin.py # Campaign lifecycle (1050 lines) ⚠️ LARGE
+    ├── campaign.py      # Campaign create/batch ⚠️ LARGE
+    ├── campaign_admin.py # Campaign lifecycle ⚠️ LARGE
     ├── campaign_sequence.py # Sequence CRUD (145 lines) ✓
     ├── lead.py          # Lead operations (150 lines) ✓
     ├── reply.py         # Reply operations (93 lines) ✓
