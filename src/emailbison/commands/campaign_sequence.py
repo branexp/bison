@@ -2,57 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import typer
 
-from ..client import ApiError, AuthError, EmailBisonClient, NetworkError
-from ..config import ConfigError, load_settings
+from ..client import ApiError, AuthError, NetworkError
 from ..models import SequenceSpec, SequenceUpdateSpec
+from ._shared import client_from_env, dump_or_human, load_json_file
 
 app = typer.Typer(add_completion=False)
-
-
-def _client_from_env(*, base_url: str | None, debug: bool) -> EmailBisonClient:
-    try:
-        settings = load_settings(base_url=base_url)
-    except ConfigError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(code=3) from e
-    return EmailBisonClient(settings, debug=debug)
-
-
-def _dump_or_human(
-    *,
-    payload: dict[str, Any],
-    json_output: bool,
-    human_lines: list[str] | None = None,
-) -> None:
-    if json_output:
-        typer.echo(json.dumps(payload, indent=2))
-        return
-
-    if human_lines:
-        for line in human_lines:
-            typer.echo(line)
-        return
-
-    typer.echo(payload)
-
-
-def _load_json_file(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        typer.echo(f"File not found: {path}", err=True)
-        raise typer.Exit(code=2)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        typer.echo(f"Invalid JSON in {path}: {e}", err=True)
-        raise typer.Exit(code=2) from e
-    if not isinstance(data, dict):
-        typer.echo("File must contain a JSON object at the top level", err=True)
-        raise typer.Exit(code=2)
-    return data
 
 
 @app.command("get")
@@ -66,7 +23,7 @@ def sequence_get(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.get_sequence_steps_v11(campaign_id)
 
@@ -88,7 +45,7 @@ def sequence_get(
                     subj = step.get("email_subject")
                     lines.append(f"step_id={sid} order={order} wait_in_days={wait} subject={subj}")
 
-        _dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
+        dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
 
     except AuthError as e:
         typer.echo(str(e), err=True)
@@ -115,16 +72,16 @@ def sequence_set(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    spec = SequenceSpec.model_validate(_load_json_file(file))
+    spec = SequenceSpec.model_validate(load_json_file(file))
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         steps = [s.model_dump(exclude_none=True) for s in spec.sequence_steps]
         raw, _ = client.create_sequence_steps_v11(
             campaign_id,
             {"title": spec.title, "sequence_steps": steps},
         )
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
 
     except AuthError as e:
         typer.echo(str(e), err=True)
@@ -153,16 +110,16 @@ def sequence_update(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    spec = SequenceUpdateSpec.model_validate(_load_json_file(file))
+    spec = SequenceUpdateSpec.model_validate(load_json_file(file))
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         steps = [s.model_dump(exclude_none=True) for s in spec.sequence_steps]
         raw, _ = client.update_sequence_steps_v11(
             sequence_id,
             {"title": spec.title, "sequence_steps": steps},
         )
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
 
     except AuthError as e:
         typer.echo(str(e), err=True)
