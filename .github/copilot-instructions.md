@@ -127,7 +127,7 @@ Do not invent new exit codes unless explicitly required and applied consistently
 ## Testing Guidelines
 - Test framework: `pytest`
 - HTTP mocking: `respx`
-- Current suite: 77 tests
+- Test suite: pytest tests in the `tests/` directory
 - Core test files include:
   - `test_client.py`
   - `test_models.py`
