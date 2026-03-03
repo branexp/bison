@@ -202,6 +202,17 @@ emailbison --debug campaign create --file campaign.example.json
 
 Debug output never prints the full auth token.
 
+## Architecture
+
+Concise module map (from `src/emailbison/`):
+- **API Layer:** `client.py` — HTTP client (`EmailBisonClient`)
+- **Configuration Layer:** `config.py` — settings precedence (CLI args > env vars > config file > defaults)
+- **Data Layer:** `models.py`, `db.py` — Pydantic models and PostgreSQL integration
+- **CLI Layer:** `cli.py`, `__main__.py`, `commands/` — Typer app and user-facing commands
+- **Utilities:** `utils/` — shared helpers (e.g., redaction, time utilities)
+
+Commands share common CLI helpers via `commands/_shared.py` (e.g., `client_from_env`, `dump_or_human`, `load_json_file`), with `commands/__init__.py` re-exporting for backward compatibility.
+
 ## Exit codes
 
 - `0` success
@@ -216,6 +227,13 @@ Debug output never prints the full auth token.
 pytest
 ruff check .
 ```
+
+### Development Notes
+
+- **Test suite:** 77 tests across 22 files; tests cover client, models, and CLI commands.
+- **Recent refactor:** Introduced `commands/_shared.py` to consolidate CLI utilities and eliminated ~120 lines of duplicate code across command modules.
+- **Known gap:** `campaign_sequence.py` lacks direct test coverage (tracked for future work).
+- **Audit score:** 17/25 — strong implementation depth and test coverage; see `DEEP_MODULE_AUDIT.md` for details.
 
 ### Regenerate JSON schema
 

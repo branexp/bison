@@ -8,8 +8,8 @@ from typing import Any
 
 import typer
 
-from ..client import ApiError, AuthError, EmailBisonClient, NetworkError
-from ..config import ConfigError, load_settings
+from ._shared import client_from_env, dump_or_human
+from ..client import ApiError, AuthError, NetworkError
 from ..db import DatabaseError, init_db, upsert_leads
 from ..db import get_stats as get_db_stats
 
@@ -22,33 +22,6 @@ def _require_non_empty_int_list(values: list[int] | None, *, what: str) -> list[
         typer.echo(f"Missing at least one {what} (repeatable).", err=True)
         raise typer.Exit(code=2)
     return vals
-
-
-def _client_from_env(*, base_url: str | None, debug: bool) -> EmailBisonClient:
-    try:
-        settings = load_settings(base_url=base_url)
-    except ConfigError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(code=3) from e
-    return EmailBisonClient(settings, debug=debug)
-
-
-def _dump_or_human(
-    *,
-    payload: dict[str, Any],
-    json_output: bool,
-    human_lines: list[str] | None = None,
-) -> None:
-    if json_output:
-        typer.echo(json.dumps(payload, indent=2))
-        return
-
-    if human_lines:
-        for line in human_lines:
-            typer.echo(line)
-        return
-
-    typer.echo(payload)
 
 
 def _coerce_int(value: Any) -> int:
@@ -98,7 +71,7 @@ def list_campaigns(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         all_campaigns, _ = client.list_all_campaigns(
             search=search, status=status, tag_ids=tag_id or None
@@ -147,7 +120,7 @@ def campaign_summary(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.list_campaigns(status=status, tag_ids=tag_ids or None)
         data = raw.get("data")
@@ -298,10 +271,10 @@ def get_campaign(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.campaign_details(campaign_id)
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
@@ -324,10 +297,10 @@ def pause_campaign(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.pause_campaign(campaign_id)
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
@@ -350,10 +323,10 @@ def resume_campaign(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.resume_campaign(campaign_id)
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
@@ -383,7 +356,7 @@ def start_campaign(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         missing: list[str] = []
 
@@ -481,10 +454,10 @@ def archive_campaign(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.archive_campaign(campaign_id)
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
@@ -509,7 +482,7 @@ def campaign_sender_emails(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.get_campaign_sender_emails(campaign_id)
 
@@ -524,7 +497,7 @@ def campaign_sender_emails(
                 status = row.get("status")
                 lines.append(f"id={sid} status={status} email={email}")
 
-        _dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
+        dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
 
     except AuthError as e:
         typer.echo(str(e), err=True)
@@ -557,10 +530,10 @@ def attach_sender_emails(
 
     ids = _require_non_empty_int_list(sender_email_id, what="--sender-email-id")
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.attach_sender_emails(campaign_id, sender_email_ids=ids)
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
@@ -592,10 +565,10 @@ def remove_sender_emails(
 
     ids = _require_non_empty_int_list(sender_email_id, what="--sender-email-id")
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.remove_sender_emails(campaign_id, sender_email_ids=ids)
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
@@ -622,10 +595,10 @@ def campaign_stats(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.campaign_stats(campaign_id, start_date=start_date, end_date=end_date)
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
@@ -657,7 +630,7 @@ def campaign_replies(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.campaign_replies(
             campaign_id,
@@ -681,7 +654,7 @@ def campaign_replies(
                 frm = row.get("from_email_address")
                 lines.append(f"id={rid} from={frm} subject={subj}")
 
-        _dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
+        dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
 
     except AuthError as e:
         typer.echo(str(e), err=True)
@@ -714,10 +687,10 @@ def stop_future_emails(
 
     lead_ids = _require_non_empty_int_list(lead_id, what="--lead-id")
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.stop_future_emails_for_leads(campaign_id, lead_ids=lead_ids)
-        _dump_or_human(payload=raw, json_output=json_output)
+        dump_or_human(payload=raw, json_output=json_output)
     except AuthError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=3) from e
@@ -756,7 +729,7 @@ def export_leads(
         raise typer.Exit(code=2)
     out_path = output or Path(f"campaign_{campaign_id}_leads.csv")
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         # 1. Fetch all leads (paginated)
         leads: list[dict[str, Any]] = []
@@ -916,7 +889,7 @@ def export_all_leads(
         typer.echo("JSON output not supported for bulk export.", err=True)
         raise typer.Exit(code=2)
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         typer.echo("Fetching campaigns...", err=True)
         all_campaign_list, _ = client.list_all_campaigns(status=status)
@@ -1131,7 +1104,7 @@ def upload_leads(
         typer.echo("Provide a campaign ID or use --all to upload all campaigns.", err=True)
         raise typer.Exit(code=2)
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         if init_schema:
             typer.echo("Initializing database schema...", err=True)

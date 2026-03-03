@@ -1,41 +1,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import typer
 
-from ..client import ApiError, AuthError, EmailBisonClient, NetworkError
-from ..config import ConfigError, load_settings
+from ._shared import client_from_env, dump_or_human
+from ..client import ApiError, AuthError, NetworkError
 
 app = typer.Typer(add_completion=False)
-
-
-def _client_from_env(*, base_url: str | None, debug: bool) -> EmailBisonClient:
-    try:
-        settings = load_settings(base_url=base_url)
-    except ConfigError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(code=3) from e
-    return EmailBisonClient(settings, debug=debug)
-
-
-def _dump_or_human(
-    *,
-    payload: dict[str, Any],
-    json_output: bool,
-    human_lines: list[str] | None = None,
-) -> None:
-    if json_output:
-        typer.echo(json.dumps(payload, indent=2))
-        return
-
-    if human_lines:
-        for line in human_lines:
-            typer.echo(line)
-        return
-
-    typer.echo(payload)
 
 
 @app.command("list")
@@ -52,7 +24,7 @@ def list_sender_emails(
     json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     debug = bool(ctx.obj.get("debug")) if ctx.obj else False
 
-    client = _client_from_env(base_url=base_url, debug=debug)
+    client = client_from_env(base_url=base_url, debug=debug)
     try:
         raw, _ = client.list_sender_emails(
             search=search,
@@ -73,7 +45,7 @@ def list_sender_emails(
                 daily = row.get("daily_limit")
                 lines.append(f"id={sid} status={status} daily_limit={daily} email={email}")
 
-        _dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
+        dump_or_human(payload=raw, json_output=json_output, human_lines=lines)
 
     except AuthError as e:
         typer.echo(str(e), err=True)
