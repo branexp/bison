@@ -17,7 +17,7 @@ The bison project is a CLI tool and SDK for the EmailBison email campaign platfo
 | **Interface Clarity** | 3 | 5 | Duplicated helper functions across modules |
 | **Boundary Enforcement** | 2 | 5 | Leaky abstractions, direct env reads |
 | **Implementation Depth** | 5 | 5 | Good separation of concerns at module level |
-| **Test Coverage** | 4 | 5 | 77 automated tests across the `tests/` suite, good coverage |
+| **Test Coverage** | 4 | 5 | Around 75 automated tests across the `tests/` suite, good coverage |
 | **Error Propagation** | N/A | - | Not scored in analyzer |
 | **Observability** | N/A | - | Not scored in analyzer |
 | **Configuration Isolation** | N/A | - | Not scored in analyzer |
