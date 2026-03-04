@@ -188,7 +188,9 @@ def upsert_leads(
                             "phone": contact_data.get("phone"),
                         })
                     cur.executemany(contact_sql, contact_params_list)
-                    contacts_updated = cur.rowcount if cur.rowcount >= 0 else 0
+                    # Note: psycopg rowcount after executemany reflects the last statement only;
+                    # contacts_updated is approximate but avoids N+1 round-trips.
+                    contacts_updated = len(contact_params_list)
 
         return {
             "leads_upserted": leads_upserted,
