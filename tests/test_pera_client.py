@@ -91,7 +91,8 @@ class TestUpsertLeads:
         result = upsert_leads("postgresql://fake/db", leads)
         assert result["leads_upserted"] == 1
         assert result["skipped_no_contactid"] == 0
-        cursor.executemany.assert_called_once()
+        # executemany called twice: once for leads INSERT, once for contacts UPDATE
+        assert cursor.executemany.call_count == 2
 
     @patch("emailbison.pera_client.get_connection")
     def test_upsert_leads_raises_database_error_on_exception(self, mock_get_conn):
@@ -141,8 +142,8 @@ class TestInitDb:
         mock_get_conn.return_value = conn
         init_db("postgresql://fake/db")
         mock_get_conn.assert_called_once_with("postgresql://fake/db")
-        # Should execute at least 9 DDL statements (3 CREATE TABLE + 6 CREATE INDEX)
-        assert cursor.execute.call_count >= 9
+        # Should execute at least 10 DDL statements (3 CREATE TABLE + 7 CREATE INDEX)
+        assert cursor.execute.call_count >= 10
 
     def test_init_db_raises_database_error_if_psycopg_missing(self):
         import emailbison.pera_client as pc

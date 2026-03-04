@@ -1174,6 +1174,15 @@ def sync_leads(
 
         typer.echo(f"Syncing {len(campaigns_to_sync)} campaigns...", err=True)
 
+        # Validate all campaign IDs are integers before proceeding
+        invalid = [c for c in campaigns_to_sync if not isinstance(c.get("id"), int)]
+        if invalid:
+            typer.echo(
+                "One or more campaigns are missing a valid integer 'id'; cannot sync.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
+
         # Step 1: Upsert campaigns
         campaign_records = []
         for c in campaigns_to_sync:
@@ -1359,9 +1368,9 @@ def db_stats(
         "--database-url",
         help="PostgreSQL connection URL (or set PERA_DATABASE_URL).",
     ),
-    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     """Show database statistics."""
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     db_url = (
         database_url
         or os.environ.get("PERA_DATABASE_URL")
@@ -1403,9 +1412,9 @@ def campaign_stats_cmd(
         "--database-url",
         help="PostgreSQL connection URL.",
     ),
-    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     """Show aggregated stats per campaign."""
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     db_url = (
         database_url
         or os.environ.get("PERA_DATABASE_URL")
@@ -1450,9 +1459,9 @@ def leads_by_status_cmd(
         "--database-url",
         help="PostgreSQL connection URL.",
     ),
-    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     """Show lead status breakdown per campaign."""
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     db_url = (
         database_url
         or os.environ.get("PERA_DATABASE_URL")
@@ -1495,9 +1504,9 @@ def booking_rate_cmd(
         "--database-url",
         help="PostgreSQL connection URL.",
     ),
-    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     """Show meeting booking rate (reply rate) for campaigns targeting a state."""
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
     db_url = (
         database_url
         or os.environ.get("PERA_DATABASE_URL")

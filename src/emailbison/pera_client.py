@@ -134,7 +134,7 @@ def upsert_leads(
 
                 skipped_no_contactid = len(leads_without_contact)
 
-                # Upsert leads
+                # Upsert leads (only those with a contact_id)
                 lead_sql = """
                 INSERT INTO emailbison_leads (
                     id, contact_id, email, first_name, last_name,
@@ -155,10 +155,11 @@ def upsert_leads(
                     tags = EXCLUDED.tags,
                     updated_at = EXCLUDED.updated_at
                 """
-                cur.executemany(lead_sql, leads)
-                leads_upserted = len(leads)
+                if leads_with_contact:
+                    cur.executemany(lead_sql, leads_with_contact)
+                leads_upserted = len(leads_with_contact)
 
-                # Update contacts (overwrite with EmailBison data)
+                # Update contacts (overwrite with EmailBison data) via executemany
                 contact_sql = """
                 UPDATE contacts SET
                     "FirstName" = COALESCE(%(first_name)s, "FirstName"),
@@ -172,20 +173,22 @@ def upsert_leads(
                 WHERE "ContactId" = %(contact_id)s
                 """
 
-                for lead in leads_with_contact:
-                    contact_data = lead.get("contact_data", {})
-                    cur.execute(contact_sql, {
-                        "contact_id": lead["contact_id"],
-                        "first_name": lead.get("first_name") or contact_data.get("first_name"),
-                        "last_name": lead.get("last_name") or contact_data.get("last_name"),
-                        "title": lead.get("title") or contact_data.get("title"),
-                        "email": lead.get("email"),
-                        "organization": contact_data.get("organization"),
-                        "state": contact_data.get("state"),
-                        "phone": contact_data.get("phone"),
-                    })
-                    if cur.rowcount > 0:
-                        contacts_updated += 1
+                if leads_with_contact:
+                    contact_params_list = []
+                    for lead in leads_with_contact:
+                        contact_data = lead.get("contact_data", {})
+                        contact_params_list.append({
+                            "contact_id": lead["contact_id"],
+                            "first_name": lead.get("first_name") or contact_data.get("first_name"),
+                            "last_name": lead.get("last_name") or contact_data.get("last_name"),
+                            "title": lead.get("title") or contact_data.get("title"),
+                            "email": lead.get("email"),
+                            "organization": contact_data.get("organization"),
+                            "state": contact_data.get("state"),
+                            "phone": contact_data.get("phone"),
+                        })
+                    cur.executemany(contact_sql, contact_params_list)
+                    contacts_updated = cur.rowcount if cur.rowcount >= 0 else 0
 
         return {
             "leads_upserted": leads_upserted,
@@ -430,7 +433,8 @@ def init_db(database_url: str) -> None:
             tags TEXT[],
             created_at TIMESTAMPTZ,
             updated_at TIMESTAMPTZ,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_emailbison_leads_email UNIQUE (email)
         )
         """,
         # Contact-campaign junction table
@@ -455,11 +459,12 @@ def init_db(database_url: str) -> None:
         "CREATE INDEX IF NOT EXISTS idx_contact_campaigns_campaign"
         " ON contact_campaigns(campaign_id)",
         "CREATE INDEX IF NOT EXISTS idx_contact_campaigns_lead ON contact_campaigns(lead_id)",
+        "CREATE INDEX IF NOT EXISTS idx_contact_campaigns_stats"
+        " ON contact_campaigns(campaign_id, emails_sent, opens, replies)",
     ]
 
-    conn = get_connection(database_url)
-
     try:
+        conn = get_connection(database_url)
         with conn:
             with conn.cursor() as cur:
                 for ddl in _DDL_STATEMENTS:
