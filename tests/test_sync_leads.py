@@ -206,7 +206,9 @@ def test_sync_leads_init_flag(
 
     mock_upsert_campaigns.return_value = {"campaigns_upserted": 0}
     mock_upsert_leads.return_value = {
-        "leads_upserted": 0, "contacts_updated": 0, "skipped_no_contactid": 0
+        "leads_upserted": 0,
+        "contacts_updated": 0,
+        "skipped_no_contactid": 0,
     }
     mock_upsert_cc.return_value = {"memberships_upserted": 0}
 

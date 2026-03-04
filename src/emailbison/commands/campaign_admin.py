@@ -1199,6 +1199,7 @@ def sync_leads(
         for campaign in campaigns_to_sync:
             cid = campaign.get("id")
             if not isinstance(cid, int):
+                typer.echo(f"Skipping campaign with invalid id {cid!r}.", err=True)
                 continue
 
             # Fetch leads (paginated)
