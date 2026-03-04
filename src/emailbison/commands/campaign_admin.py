@@ -8,10 +8,21 @@ from typing import Any
 
 import typer
 
-from ._shared import client_from_env, dump_or_human
 from ..client import ApiError, AuthError, NetworkError
-from ..db import DatabaseError, init_db, upsert_leads
-from ..db import get_stats as get_db_stats
+from ..pera_client import (
+    DatabaseError,
+    get_campaign_stats,
+    get_leads_by_status_per_campaign,
+    get_meeting_booking_rate_by_state,
+    init_db,
+    upsert_campaigns,
+    upsert_contact_campaigns,
+    upsert_leads,
+)
+from ..pera_client import (
+    get_sync_stats as get_db_stats,
+)
+from ._shared import client_from_env, dump_or_human
 
 app = typer.Typer(add_completion=False)
 
@@ -1060,17 +1071,17 @@ def export_all_leads(
         client.close()
 
 
-@app.command("upload-leads")
-def upload_leads(
+@app.command("sync-leads")
+def sync_leads(
     ctx: typer.Context,
     campaign_id: int | None = typer.Argument(
         None,
-        help="Single campaign ID to upload (omit for --all)",
+        help="Single campaign ID to sync (omit for --all)",
     ),
     all_campaigns: bool = typer.Option(
         False,
         "--all",
-        help="Upload leads from all campaigns with leads.",
+        help="Sync leads from all campaigns.",
     ),
     status: str | None = typer.Option(
         None,
@@ -1080,133 +1091,204 @@ def upload_leads(
     init_schema: bool = typer.Option(
         False,
         "--init",
-        help="Initialize database schema before upload.",
+        help="Initialize database schema before sync.",
     ),
     database_url: str | None = typer.Option(
         None,
         "--database-url",
-        help="PostgreSQL connection URL (or set BISON_DATABASE_URL).",
+        help="PostgreSQL connection URL (or set PERA_DATABASE_URL).",
     ),
     base_url: str | None = typer.Option(None, "--base-url"),
 ) -> None:
-    """Upload exported lead data to a PostgreSQL database (Neon)."""
-    debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+    """
+    Sync EmailBison lead data to pera-contacts database.
 
-    db_url = database_url or os.environ.get("BISON_DATABASE_URL")
+    This command:
+    1. Fetches campaigns from EmailBison API
+    2. For each campaign, fetches all leads
+    3. Matches leads to contacts via contactid custom variable
+    4. Upserts leads to emailbison_leads table
+    5. Updates contacts with EmailBison data (always overwrite)
+    6. Upserts campaign memberships with stats
+
+    Examples:
+        # Sync single campaign
+        emailbison campaign sync-leads 116
+
+        # Sync all campaigns
+        emailbison campaign sync-leads --all
+
+        # Initialize schema and sync
+        emailbison campaign sync-leads --all --init
+
+        # Filter by campaign status
+        emailbison campaign sync-leads --all --status paused
+    """
+    debug = bool(ctx.obj.get("debug")) if ctx.obj else False
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+
+    db_url = (
+        database_url
+        or os.environ.get("PERA_DATABASE_URL")
+        or os.environ.get("BISON_DATABASE_URL")
+    )
     if not db_url:
         typer.echo(
-            "Database URL required. Set BISON_DATABASE_URL or use --database-url.",
+            "Database URL required. Set PERA_DATABASE_URL or use --database-url.",
             err=True,
         )
         raise typer.Exit(code=2)
 
     if not campaign_id and not all_campaigns:
-        typer.echo("Provide a campaign ID or use --all to upload all campaigns.", err=True)
+        typer.echo("Provide a campaign ID or use --all to sync all campaigns.", err=True)
         raise typer.Exit(code=2)
 
     client = client_from_env(base_url=base_url, debug=debug)
+
     try:
+        # Initialize schema if requested
         if init_schema:
             typer.echo("Initializing database schema...", err=True)
             init_db(db_url)
             typer.echo("Schema initialized.", err=True)
 
+        # Determine campaigns to sync
         if all_campaigns:
             typer.echo("Fetching campaigns...", err=True)
             campaigns_data, _ = client.list_all_campaigns(status=status)
-            campaigns_to_upload = [
-                c
-                for c in campaigns_data
+            campaigns_to_sync = [
+                c for c in campaigns_data
                 if isinstance(c, dict) and c.get("total_leads", 0) > 0
             ]
         else:
             raw, _ = client.campaign_details(campaign_id)
             campaign_data = raw.get("data")
-            if not isinstance(campaign_data, dict) or not isinstance(
-                campaign_data.get("id"), int
-            ):
-                typer.echo(
-                    f"Invalid campaign response for id {campaign_id}.", err=True
-                )
+            if not isinstance(campaign_data, dict):
+                typer.echo(f"Invalid campaign response for id {campaign_id}.", err=True)
                 raise typer.Exit(code=3)
-            campaigns_to_upload = [campaign_data]
+            campaigns_to_sync = [campaign_data]
 
-        if not campaigns_to_upload:
+        if not campaigns_to_sync:
             typer.echo("No campaigns with leads found.", err=True)
             raise typer.Exit(code=0)
 
-        typer.echo(f"Uploading {len(campaigns_to_upload)} campaigns...", err=True)
+        typer.echo(f"Syncing {len(campaigns_to_sync)} campaigns...", err=True)
 
+        # Validate all campaign IDs are integers before proceeding
+        invalid = [c for c in campaigns_to_sync if not isinstance(c.get("id"), int)]
+        if invalid:
+            typer.echo(
+                "One or more campaigns are missing a valid integer 'id'; cannot sync.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
+
+        # Step 1: Upsert campaigns
+        campaign_records = []
+        for c in campaigns_to_sync:
+            campaign_records.append({
+                "id": c.get("id"),
+                "name": c.get("name", ""),
+                "status": c.get("status", "draft"),
+                "total_leads": c.get("total_leads", 0),
+                "created_at": c.get("created_at"),
+                "updated_at": c.get("updated_at"),
+            })
+
+        campaign_result = upsert_campaigns(db_url, campaign_records)
+        typer.echo(f"  Upserted {campaign_result['campaigns_upserted']} campaigns", err=True)
+
+        # Step 2: Collect leads and build data structures
         all_leads: dict[int, dict[str, Any]] = {}
-        lead_campaign_memberships: dict[int, list[dict[str, Any]]] = {}
-        # Track last sent per (lead_id, campaign_id) so each membership gets correct value
+        contact_campaign_memberships: list[dict[str, Any]] = []
+
+        # Track last_sent_date per (lead_id, campaign_id)
         last_sent: dict[tuple[int, int], str] = {}
 
-        for campaign in campaigns_to_upload:
-            if not isinstance(campaign, dict):
-                typer.echo(
-                    f"Skipping campaign with unexpected type {type(campaign)!r}.", err=True
-                )
-                continue
+        for campaign in campaigns_to_sync:
             cid = campaign.get("id")
             if not isinstance(cid, int):
                 typer.echo(f"Skipping campaign with invalid id {cid!r}.", err=True)
                 continue
-            campaign_name = campaign.get("name", "")
 
+            # Fetch leads (paginated)
             page = 1
             while True:
                 raw, _ = client.list_campaign_leads(cid, page=page)
                 leads = raw.get("data", [])
                 if not leads:
                     break
+
                 for lead in leads:
                     lead_id = lead.get("id")
                     if lead_id is None:
                         continue
-                    stats = lead.get("overall_stats") or {}
-                    if not isinstance(stats, dict):
-                        stats = {}
-                    if lead_id not in lead_campaign_memberships:
-                        lead_campaign_memberships[lead_id] = []
-                    lead_campaign_memberships[lead_id].append(
-                        {
+
+                    # Extract contactid from custom_variables
+                    contact_id = None
+                    contact_data: dict[str, Any] = {}
+
+                    for cv in lead.get("custom_variables") or []:
+                        if isinstance(cv, dict):
+                            name = cv.get("name", "").lower()
+                            value = cv.get("value")
+                            if name == "contactid" and value:
+                                try:
+                                    contact_id = int(value)
+                                except (ValueError, TypeError):
+                                    pass
+                            elif value:
+                                contact_data[name] = value
+
+                    # Build lead record
+                    if lead_id not in all_leads:
+                        all_leads[lead_id] = {
+                            "id": lead_id,
+                            "contact_id": contact_id,
+                            "email": lead.get("email", ""),
+                            "first_name": lead.get("first_name"),
+                            "last_name": lead.get("last_name"),
+                            "title": lead.get("title"),
+                            "company": lead.get("company"),
+                            "status": lead.get("status", "unverified"),
+                            "tags": [
+                                t.get("name", "") for t in (lead.get("tags") or [])
+                                if isinstance(t, dict)
+                            ],
+                            "contact_data": contact_data,
+                            "created_at": lead.get("created_at"),
+                            "updated_at": lead.get("updated_at"),
+                        }
+
+                    # Build campaign membership
+                    if contact_id:
+                        stats = lead.get("overall_stats") or {}
+                        if not isinstance(stats, dict):
+                            stats = {}
+
+                        contact_campaign_memberships.append({
+                            "contact_id": contact_id,
                             "campaign_id": cid,
-                            "campaign_name": campaign_name,
+                            "lead_id": lead_id,
                             "emails_sent": stats.get("emails_sent", 0),
                             "opens": stats.get("opens", 0),
                             "replies": stats.get("replies", 0),
                             "last_sent_date": None,
-                        }
-                    )
-                    if lead_id not in all_leads:
-                        cv_dict: dict[str, Any] = {}
-                        for cv in lead.get("custom_variables") or []:
-                            if isinstance(cv, dict) and cv.get("name"):
-                                cv_dict[cv["name"]] = cv.get("value")
-                        all_leads[lead_id] = {
-                            "id": lead_id,
-                            "email": lead.get("email", ""),
-                            "first_name": lead.get("first_name", ""),
-                            "last_name": lead.get("last_name", ""),
-                            "title": lead.get("title", ""),
-                            "company": lead.get("company", ""),
-                            "status": lead.get("status", "unverified"),
-                            "custom_variables": json.dumps(cv_dict),
-                            "created_at": lead.get("created_at"),
-                            "updated_at": lead.get("updated_at"),
-                        }
+                        })
+
                 meta = raw.get("meta", {})
                 if page >= meta.get("last_page", 1):
                     break
                 page += 1
 
+            # Fetch scheduled emails for last_sent_date
             page = 1
             while True:
                 raw, _ = client.list_scheduled_emails(cid, status="sent", page=page)
                 items = raw.get("data", [])
                 if not items:
                     break
+
                 for item in items:
                     if not isinstance(item, dict):
                         continue
@@ -1218,25 +1300,49 @@ def upload_leads(
                         existing = last_sent.get(key)
                         if existing is None or sent_at > existing:
                             last_sent[key] = sent_at
+
                 meta = raw.get("meta", {})
                 if page >= meta.get("last_page", 1):
                     break
                 page += 1
 
-        for lead_id, memberships in lead_campaign_memberships.items():
-            for membership in memberships:
-                membership_cid = membership["campaign_id"]
-                key = (lead_id, membership_cid)
-                if key in last_sent:
-                    membership["last_sent_date"] = last_sent[key]
+        # Update last_sent_date in memberships
+        for membership in contact_campaign_memberships:
+            lead_id = membership["lead_id"]
+            campaign_id_key = membership["campaign_id"]
+            key = (lead_id, campaign_id_key)
+            if key in last_sent:
+                membership["last_sent_date"] = last_sent[key]
 
+        # Step 3: Upsert leads
         leads_list = list(all_leads.values())
-        result = upsert_leads(db_url, leads_list, lead_campaign_memberships)
-
+        leads_result = upsert_leads(db_url, leads_list)
         typer.echo(
-            f"Uploaded {result['leads_upserted']} leads "
-            f"with {result['campaign_memberships']} campaign memberships"
+            f"  Upserted {leads_result['leads_upserted']} leads "
+            f"({leads_result['skipped_no_contactid']} without contactid)",
+            err=True,
         )
+
+        # Step 4: Upsert campaign memberships
+        membership_result = upsert_contact_campaigns(db_url, contact_campaign_memberships)
+        typer.echo(
+            f"  Upserted {membership_result['memberships_upserted']} campaign memberships",
+            err=True,
+        )
+
+        # Summary
+        if json_output:
+            typer.echo(json.dumps({
+                "campaigns": campaign_result,
+                "leads": leads_result,
+                "memberships": membership_result,
+            }, indent=2))
+        else:
+            typer.echo(
+                f"\nSync complete: {campaign_result['campaigns_upserted']} campaigns, "
+                f"{leads_result['leads_upserted']} leads, "
+                f"{membership_result['memberships_upserted']} memberships"
+            )
 
     except DatabaseError as e:
         typer.echo(f"Database error: {e}", err=True)
@@ -1260,26 +1366,178 @@ def db_stats(
     database_url: str | None = typer.Option(
         None,
         "--database-url",
-        help="PostgreSQL connection URL (or set BISON_DATABASE_URL).",
+        help="PostgreSQL connection URL (or set PERA_DATABASE_URL).",
     ),
 ) -> None:
     """Show database statistics."""
-    db_url = database_url or os.environ.get("BISON_DATABASE_URL")
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    db_url = (
+        database_url
+        or os.environ.get("PERA_DATABASE_URL")
+        or os.environ.get("BISON_DATABASE_URL")
+    )
     if not db_url:
         typer.echo(
-            "Database URL required. Set BISON_DATABASE_URL or use --database-url.",
+            "Database URL required. Set PERA_DATABASE_URL or use --database-url.",
             err=True,
         )
         raise typer.Exit(code=2)
 
     try:
         stats = get_db_stats(db_url)
-        typer.echo(f"Total leads: {stats['total_leads']}")
-        typer.echo(f"Total campaigns: {stats['total_campaigns']}")
-        typer.echo(f"Total memberships: {stats['total_memberships']}")
-        typer.echo("By status:")
-        for st, count in stats["by_status"].items():
-            typer.echo(f"  {st}: {count}")
+
+        if json_output:
+            typer.echo(json.dumps(stats, indent=2))
+        else:
+            typer.echo(f"Total campaigns: {stats['total_campaigns']}")
+            typer.echo(f"Total leads: {stats['total_leads']}")
+            typer.echo(f"Leads with contact: {stats['leads_with_contact']}")
+            typer.echo(f"Leads without contact: {stats['leads_without_contact']}")
+            typer.echo(f"Total memberships: {stats['total_memberships']}")
+            typer.echo("By status:")
+            for st, count in stats["by_status"].items():
+                typer.echo(f"  {st}: {count}")
+            if stats.get("last_sync"):
+                typer.echo(f"Last sync: {stats['last_sync']}")
+    except DatabaseError as e:
+        typer.echo(f"Database error: {e}", err=True)
+        raise typer.Exit(code=5) from e
+
+
+@app.command("campaign-stats")
+def campaign_stats_cmd(
+    ctx: typer.Context,
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="PostgreSQL connection URL.",
+    ),
+) -> None:
+    """Show aggregated stats per campaign."""
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    db_url = (
+        database_url
+        or os.environ.get("PERA_DATABASE_URL")
+        or os.environ.get("BISON_DATABASE_URL")
+    )
+    if not db_url:
+        typer.echo("Database URL required.", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        stats = get_campaign_stats(db_url)
+
+        if json_output:
+            typer.echo(json.dumps(stats, indent=2))
+        else:
+            headers = ["ID", "Name", "Status", "Contacts", "Emails", "Opens", "Replies"]
+            rows = []
+            for s in stats:
+                rows.append([
+                    str(s["campaign_id"]),
+                    s["campaign_name"] or "",
+                    s["campaign_status"] or "",
+                    str(s["total_contacts"] or 0),
+                    str(s["total_emails_sent"] or 0),
+                    str(s["total_opens"] or 0),
+                    str(s["total_replies"] or 0),
+                ])
+
+            for line in _format_table(headers, rows):
+                typer.echo(line)
+
+    except DatabaseError as e:
+        typer.echo(f"Database error: {e}", err=True)
+        raise typer.Exit(code=5) from e
+
+
+@app.command("leads-by-status")
+def leads_by_status_cmd(
+    ctx: typer.Context,
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="PostgreSQL connection URL.",
+    ),
+) -> None:
+    """Show lead status breakdown per campaign."""
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    db_url = (
+        database_url
+        or os.environ.get("PERA_DATABASE_URL")
+        or os.environ.get("BISON_DATABASE_URL")
+    )
+    if not db_url:
+        typer.echo("Database URL required.", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        stats = get_leads_by_status_per_campaign(db_url)
+
+        if json_output:
+            typer.echo(json.dumps(stats, indent=2))
+        else:
+            headers = ["Campaign ID", "Campaign Name", "Status", "Count"]
+            rows = []
+            for s in stats:
+                rows.append([
+                    str(s["campaign_id"]),
+                    s["campaign_name"] or "",
+                    s["lead_status"] or "",
+                    str(s["count"]),
+                ])
+
+            for line in _format_table(headers, rows):
+                typer.echo(line)
+
+    except DatabaseError as e:
+        typer.echo(f"Database error: {e}", err=True)
+        raise typer.Exit(code=5) from e
+
+
+@app.command("booking-rate")
+def booking_rate_cmd(
+    ctx: typer.Context,
+    state: str = typer.Option("MA", "--state", help="State to filter by."),
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="PostgreSQL connection URL.",
+    ),
+) -> None:
+    """Show meeting booking rate (reply rate) for campaigns targeting a state."""
+    json_output = bool(ctx.obj.get("json")) if ctx.obj else False
+    db_url = (
+        database_url
+        or os.environ.get("PERA_DATABASE_URL")
+        or os.environ.get("BISON_DATABASE_URL")
+    )
+    if not db_url:
+        typer.echo("Database URL required.", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        result = get_meeting_booking_rate_by_state(db_url, state=state)
+
+        if json_output:
+            typer.echo(json.dumps(result, indent=2))
+        else:
+            typer.echo(f"Campaigns targeting {state}:")
+            typer.echo("")
+            headers = ["Campaign ID", "Name", "Contacts", "Replies", "Reply Rate %"]
+            rows = []
+            for c in result["campaigns"]:
+                rows.append([
+                    str(c["campaign_id"]),
+                    c["campaign_name"] or "",
+                    str(c["total_contacts"] or 0),
+                    str(c["total_replies"] or 0),
+                    str(c["reply_rate_pct"] or 0),
+                ])
+
+            for line in _format_table(headers, rows):
+                typer.echo(line)
+
     except DatabaseError as e:
         typer.echo(f"Database error: {e}", err=True)
         raise typer.Exit(code=5) from e
